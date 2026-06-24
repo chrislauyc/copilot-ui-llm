@@ -1,0 +1,14 @@
+[
+  {
+    "turnIndex": 0,
+    "subtaskId": "classify_intent",
+    "role": "planner",
+    "expectedOutput": "Intent Classified: Token Bucket Rate Limiter validation run. Initiating verification gates."
+  },
+  {
+    "turnIndex": 0,
+    "subtaskId": "run_tests",
+    "role": "executor",
+    "expectedOutput": "Token Bucket Rate Limiter active validation run. Starting automated verify-gate runner."
+  }
+]

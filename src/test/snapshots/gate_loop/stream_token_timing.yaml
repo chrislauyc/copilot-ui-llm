@@ -1,0 +1,23 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Modify index.html to add a div.
+      - role: assistant
+        content: I will write the file changes first. Pumping conversational text content first.
+        tool_calls:
+          - id: toolcall_0
+            type: function
+            function:
+              name: run_terminal_docker
+              arguments: '{"command":"echo successtoken"}'
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Modify index.html to add a div.
+      - role: assistant
+        content: Done correcting index.html with the div.

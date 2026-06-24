@@ -1,0 +1,24 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Run the validation checks turn 1.
+      - role: assistant
+        content: Initiating first attempt fixes.
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Run the validation checks turn 2.
+      - role: assistant
+        content: Attempting second round of fixes.
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Run the validation checks turn 3.
+      - role: assistant
+        content: Final round of fixes resolving all issues.

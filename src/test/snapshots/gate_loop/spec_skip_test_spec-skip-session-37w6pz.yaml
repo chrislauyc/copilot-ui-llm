@@ -1,0 +1,23 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: user
+        content: Run spec audit once.
+      - role: assistant
+        tool_calls:
+          - id: tc1
+            type: function
+            function:
+              name: run_tests
+              arguments: "{}"
+      - role: tool
+        tool_call_id: tc1
+        content: "PASS"
+      - role: assistant
+        content: "Done."
+  - messages:
+      - role: user
+        content: Run again.
+      - role: assistant
+        content: "I did nothing."

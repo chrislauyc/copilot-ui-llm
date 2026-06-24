@@ -1,0 +1,28 @@
+models:
+  - claude-sonnet-4.5
+  - gemini-3.1-flash-lite
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Implement features conforming to architecture spec.
+      - role: assistant
+        content: I have updated the repository as requested.
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        tool_calls:
+          - id: aud_call_0
+            type: function
+            function:
+              name: submit_spec_audit
+              arguments: '{"pass":false,"violation_type":"SPEC_VIOLATION","feedback":"Authentication router is missing from the modified workspace files as requested by the architecture spec."}'
+      - role: tool
+        tool_call_id: aud_call_0
+        content: '{"status":"received"}'
+      - role: assistant
+        content: Done.

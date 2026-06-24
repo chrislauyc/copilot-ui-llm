@@ -1,0 +1,25 @@
+models:
+  - gemini-3.1-flash-lite
+  - gemini-3.5-flash
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Perform model escalation check.
+      - role: assistant
+        content: Attempt 1 - Flash Lite. Fixing syntax.
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Attempt 2 - Flash Lite retry. Let's refine syntax.
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Attempt 3 - Escalated Flash. Correcting all syntax completely.

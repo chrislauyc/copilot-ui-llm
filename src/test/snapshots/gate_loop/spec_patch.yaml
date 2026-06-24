@@ -1,0 +1,10 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Help me build a server.
+      - role: assistant
+        content: Initial standard message. Doing some work first.

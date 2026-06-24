@@ -1,0 +1,23 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Perform validation checks.
+      - role: assistant
+        content: Starting schema validation checks.
+        tool_calls:
+          - id: toolcall_0
+            type: function
+            function:
+              name: run_terminal_docker
+              arguments: '{"command":"echo success"}'
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Perform validation checks.
+      - role: assistant
+        content: Finished validation checks.
