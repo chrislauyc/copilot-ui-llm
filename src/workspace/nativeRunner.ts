@@ -54,6 +54,14 @@ export async function runNativeProcess(
     if (child.stdin.writable) {
       child.stdin.write(command + "\n");
       child.stdin.end();
+    } else {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      child.kill("SIGKILL");
+      resolve({
+        stdout: "",
+        stderr: "Native process stdin not writable — process failed to start.",
+        exitCode: 1,
+      });
     }
   });
 }
