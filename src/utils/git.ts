@@ -1,205 +1,224 @@
-import { execFile, execFileSync, spawnSync } from 'child_process';
-import * as util from 'util';
-import * as path from 'path';
-import * as fs from 'fs';
-import { getWorkspaceRoot, getGitRoot } from './sandbox';
+import { execFile } from "child_process";
+import * as util from "util";
+import * as fs from "fs/promises";
+import * as path from "path";
 
+const FIXED_GIT_PATH = "/usr/bin/git";
 const execFileAsync = util.promisify(execFile);
 
-export const DEFAULT_GIT_DIR_NAME = '.aistudio';
+export class GitSandbox {
+    private readonly workTree: string;
+    private readonly gitDir: string;
+    private busy = false;
 
-function isMockGit(): boolean {
-  return process.env.VITEST === 'true' && process.env.REAL_GIT_TEST !== 'true';
-}
-
-/**
- * Validates the working directory to prevent accidentally running git
- * commands in the host repo (e.g. root workspace without `.aistudio`),
- * which can cause destructive operations wiping the actual project.
- */
-export function getGitEnv(cwd: string) {
-  const workspaceRoot = getWorkspaceRoot();
-  const gitRoot = getGitRoot();
-
-  const isMainWorkspace = path.resolve(cwd) === path.resolve(workspaceRoot);
-
-  if (isMainWorkspace) {
-    return {
-      ...process.env,
-      GIT_DIR: gitRoot,
-      GIT_WORK_TREE: workspaceRoot,
-      GIT_PAGER: 'cat'
-    };
-  }
-
-  return {
-    ...process.env,
-    GIT_DIR: path.join(cwd, DEFAULT_GIT_DIR_NAME, '.git'),
-    GIT_WORK_TREE: cwd,
-    GIT_PAGER: 'cat'
-  };
-}
-
-/**
- * Prepares the sandbox git environment if it does not already exist.
- */
-export async function initializeGitSandboxAsync(cwd: string): Promise<void> {
-  const env = getGitEnv(cwd);
-  const gitDir = env.GIT_DIR;
-  const workTree = env.GIT_WORK_TREE;
-  if (!fs.existsSync(gitDir)) {
-    fs.mkdirSync(path.dirname(gitDir), { recursive: true });
-    fs.mkdirSync(workTree, { recursive: true });
-
-    const excludeDir = path.join(gitDir, 'info');
-    fs.mkdirSync(excludeDir, { recursive: true });
-    fs.writeFileSync(path.join(excludeDir, 'exclude'), `${DEFAULT_GIT_DIR_NAME}/\n`);
-    
-    // Create the dummy .git folder to satisfy validateGitWorktree if in test
-    if (isMockGit()) {
-      fs.mkdirSync(gitDir, { recursive: true });
-      return;
+    constructor(workTree: string, gitDir: string) {
+        this.workTree = workTree;
+        this.gitDir = gitDir;
     }
 
-    await execFileAsync('git', ['init'], { cwd: workTree, env });
-    await execFileAsync('git', ['config', 'user.email', 'sandbox@aistudio.local'], { cwd: workTree, env });
-    await execFileAsync('git', ['config', 'user.name', 'AI Studio Sandbox'], { cwd: workTree, env });
-    await execFileAsync('git', ['add', '-A'], { cwd: workTree, env }).catch(() => {});
-    await execFileAsync('git', ['commit', '--allow-empty', '-m', 'Sandbox Baseline (pre-existing files)'], { cwd: workTree, env }).catch(() => {});
-  }
-}
-
-export function initializeGitSandboxSync(cwd: string): void {
-  const env = getGitEnv(cwd);
-  const gitDir = env.GIT_DIR;
-  const workTree = env.GIT_WORK_TREE;
-  if (!fs.existsSync(gitDir)) {
-    fs.mkdirSync(path.dirname(gitDir), { recursive: true });
-    fs.mkdirSync(workTree, { recursive: true });
-
-    const excludeDir = path.join(gitDir, 'info');
-    fs.mkdirSync(excludeDir, { recursive: true });
-    fs.writeFileSync(path.join(excludeDir, 'exclude'), `${DEFAULT_GIT_DIR_NAME}/\n`);
-
-    // Create the dummy .git folder to satisfy validateGitWorktree if in test
-    if (isMockGit()) {
-      fs.mkdirSync(gitDir, { recursive: true });
-      return;
+    // -------------------------------------------------------------------------
+    // Lock helper — wraps any async operation so the busy flag is held for the
+    // entire duration of the public method, not just each individual git() call.
+    // -------------------------------------------------------------------------
+    private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+        if (this.busy) {
+            throw new Error(
+                "GitSandbox is busy — concurrent git operations are not permitted."
+            );
+        }
+        this.busy = true;
+        try {
+            return await fn();
+        } finally {
+            this.busy = false;
+        }
     }
 
-    execFileSync('git', ['init'], { cwd: workTree, env });
-    execFileSync('git', ['config', 'user.email', 'sandbox@aistudio.local'], { cwd: workTree, env });
-    execFileSync('git', ['config', 'user.name', 'AI Studio Sandbox'], { cwd: workTree, env });
-    try { execFileSync('git', ['add', '-A'], { cwd: workTree, env }); } catch (e) {}
-    try { execFileSync('git', ['commit', '--allow-empty', '-m', 'Sandbox Baseline (pre-existing files)'], { cwd: workTree, env }); } catch (e) {}
-  }
-}
+    // -------------------------------------------------------------------------
+    // Raw git executor — no longer manages the busy flag (withLock owns that).
+    // -------------------------------------------------------------------------
+    private async git(args: string[]): Promise<string> {
+        try {
+            const ret = await execFileAsync(FIXED_GIT_PATH, args, {
+                cwd: this.workTree,
+                env: {
+                    HOME: this.workTree,
+                    // FIX: USER must be a username string, not a directory path.
+                    USER: "sandbox",
+                    GIT_DIR: this.gitDir,
+                    GIT_WORK_TREE: this.workTree,
+                    GIT_PAGER: "cat"
+                }
+            });
+            return ret.stdout ? ret.stdout.trim() : "";
+        } catch (e: any) {
+            const message = e.stderr ? e.stderr.trim() : e.message;
+            throw new Error(`Git command failed (exit ${e.code}): ${message}`);
+        }
+    }
 
-export async function getGitDiffHead(cwd: string): Promise<string> {
-  if (isMockGit()) return 'MOCK_DIFF_HEAD';
-  const env = getGitEnv(cwd);
-  try {
-    const { stdout } = await execFileAsync('git', ['diff', 'HEAD'], { cwd: env.GIT_WORK_TREE, env });
-    return stdout;
-  } catch (e: any) {
-    return e.stdout?.toString() || '';
-  }
-}
+    // -------------------------------------------------------------------------
+    // Public methods — each delegates to a private *Impl so that withLock wraps
+    // the full operation boundary rather than individual git() calls.
+    // -------------------------------------------------------------------------
 
-export async function getGitDiffHeadNumstat(cwd: string): Promise<string> {
-  if (isMockGit()) return '1\t1\tmock_file.ts';
-  const env = getGitEnv(cwd);
-  try {
-    const { stdout } = await execFileAsync('git', ['diff', 'HEAD', '--numstat'], { cwd: env.GIT_WORK_TREE, env });
-    return stdout;
-  } catch (e: any) {
-    return e.stdout?.toString() || '';
-  }
-}
+    public async initializeGitSandboxAsync(): Promise<void> {
+        return this.withLock(() => this._initializeGitSandboxAsync());
+    }
 
-export async function commitAllChangesAsync(cwd: string, message: string): Promise<string> {
-  if (isMockGit()) return 'MOCK_SHA';
-  const env = getGitEnv(cwd);
-  await execFileAsync('git', ['add', '-A'], { cwd: env.GIT_WORK_TREE, env });
-  await execFileAsync('git', ['commit', '-m', message], { cwd: env.GIT_WORK_TREE, env }).catch(() => {});
-  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: env.GIT_WORK_TREE, env });
-  return stdout.trim();
-}
+    public async getGitDiffHead(): Promise<string> {
+        return this.withLock(() => this._getGitDiffHead());
+    }
 
-export function commitAllChangesSync(cwd: string, message: string): string {
-  if (isMockGit()) return 'MOCK_SHA';
-  const env = getGitEnv(cwd);
-  execFileSync('git', ['add', '-A'], { cwd: env.GIT_WORK_TREE, env });
-  try { execFileSync('git', ['commit', '-m', message], { cwd: env.GIT_WORK_TREE, env }); } catch(err) {}
-  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: env.GIT_WORK_TREE, env }).toString().trim();
-}
+    public async getGitDiffHeadNumstat(): Promise<string> {
+        return this.withLock(() => this._getGitDiffHeadNumstat());
+    }
 
-export async function restoreCheckpointAsync(cwd: string, commitSha: string, message: string): Promise<void> {
-  if (isMockGit()) return;
-  const env = getGitEnv(cwd);
+    public async commitAllChangesAsync(message: string): Promise<string> {
+        return this.withLock(() => this._commitAllChangesAsync(message));
+    }
 
-  // 1. Get the original HEAD SHA so we can move back to it later
-  const { stdout: headShaOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: env.GIT_WORK_TREE, env });
-  const originalHeadSha = headShaOut.trim();
+    public async restoreCheckpointAsync(
+        commitSha: string,
+        message: string
+    ): Promise<void> {
+        return this.withLock(() =>
+            this._restoreCheckpointAsync(commitSha, message)
+        );
+    }
 
-  // 2. Perform reset --hard to commitSha. This cleans the working directory and index to exactly commitSha.
-  // This will cleanly delete any files that exist now but didn't exist at commitSha.
-  await execFileAsync('git', ['reset', '--hard', commitSha], { cwd: env.GIT_WORK_TREE, env });
+    public async getGitDiffAsync(): Promise<string> {
+        return this.withLock(() => this._getGitDiffAsync());
+    }
 
-  // 3. Move HEAD back to originalHeadSha using a --soft reset. This does not touch the working tree or index.
-  // So the working tree and index remain exactly as they were (matching commitSha).
-  await execFileAsync('git', ['reset', '--soft', originalHeadSha], { cwd: env.GIT_WORK_TREE, env });
+    public async getHeadShaAsync(): Promise<string> {
+        return this.withLock(() => this._getHeadShaAsync());
+    }
 
-  // 4. Run git clean -fd to clean any untracked directories/files that might be left over from reset.
-  await execFileAsync('git', ['clean', '-fd'], { cwd: env.GIT_WORK_TREE, env });
+    // -------------------------------------------------------------------------
+    // Private implementations
+    // -------------------------------------------------------------------------
 
-  // 5. Stage all changes. Since the index is still matching commitSha, this is technically already staged,
-  // but running add -A ensures everything is in sync.
-  await execFileAsync('git', ['add', '-A'], { cwd: env.GIT_WORK_TREE, env });
+    /**
+     * Prepares the sandbox git environment if it does not already exist.
+     * Guards against partial initialisation by checking for the git HEAD file
+     * rather than just the directory, and uses async I/O throughout to avoid
+     * blocking the event loop.
+     * Roots baseline exclusions to the snapshots folder.
+     */
+    private async _initializeGitSandboxAsync(): Promise<void> {
+        // A valid git repo always has a HEAD file. Checking for it (rather than
+        // just the directory) avoids silently skipping a previously interrupted init.
+        const headPath = path.join(this.gitDir, "HEAD");
+        const alreadyInitialized = await fs.access(headPath).then(
+            () => true,
+            () => false
+        );
 
-  // 6. Commit the changes to keep the history linear and HEAD where it was.
-  await execFileAsync('git', ['commit', '-m', message], { cwd: env.GIT_WORK_TREE, env }).catch(() => {});
-}
+        if (!alreadyInitialized) {
+            await fs.mkdir(this.gitDir, { recursive: true });
+            await fs.mkdir(this.workTree, { recursive: true });
 
-export function getGitDiffSync(cwd: string): string {
-  if (isMockGit()) return 'MOCK_DIFF';
-  const env = getGitEnv(cwd);
-  try {
-    const res = spawnSync('git', ['--no-pager', 'diff'], { 
-      cwd: env.GIT_WORK_TREE, 
-      env,
-      timeout: 5000,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-    if (res.error) throw res.error;
-    return res.stdout ? res.stdout.toString() : '';
-  } catch (e: any) {
-    return '';
-  }
-}
+            // Run init first so git owns the metadata layout, then write
+            // info/exclude into the directory structure git itself created.
+            await this.git(["init"]);
 
-export async function getGitDiffAsync(cwd: string): Promise<string> {
-  if (isMockGit()) return 'MOCK_DIFF';
-  const env = getGitEnv(cwd);
-  try {
-    const { stdout } = await execFileAsync('git', ['--no-pager', 'diff'], { 
-      cwd: env.GIT_WORK_TREE, 
-      env,
-      timeout: 5000
-    });
-    return stdout;
-  } catch (e: any) {
-    return e.stdout?.toString() || '';
-  }
-}
+            const excludeDir = path.join(this.gitDir, "info");
+            await fs.mkdir(excludeDir, { recursive: true });
+            await fs.writeFile(
+                path.join(excludeDir, "exclude"),
+                "snapshots/\n"
+            );
+            await this.git(["config", "user.email", "sandbox@aistudio.local"]);
+            await this.git(["config", "user.name", "AI Studio Sandbox"]);
+            await this.git(["add", "-A"]);
+            await this.git([
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Sandbox Baseline (pre-existing files)"
+            ]);
+        }
+    }
 
-export async function getHeadShaAsync(cwd: string): Promise<string> {
-  if (isMockGit()) return 'MOCK_SHA';
-  const env = getGitEnv(cwd);
-  try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: env.GIT_WORK_TREE, env });
-    return stdout.trim();
-  } catch (e: any) {
-    return '';
-  }
+    /**
+     * Compares the current working tree AND staging area against the last commit (HEAD).
+     * Captures both staged and unstaged local changes.
+     */
+    private async _getGitDiffHead(): Promise<string> {
+        return this.git(["diff", "HEAD"]);
+    }
+
+    /**
+     * Compares the current working tree AND staging area against HEAD, returning
+     * only the numerical tracking statistics (added/deleted lines per modified file).
+     */
+    private async _getGitDiffHeadNumstat(): Promise<string> {
+        return this.git(["diff", "HEAD", "--numstat"]);
+    }
+
+    /**
+     * Stages all modified and untracked changes, records a new commit, and
+     * returns the resulting HEAD SHA. Uses --allow-empty so that snapshot commits
+     * are always recorded as timestamped markers even when nothing has changed.
+     */
+    private async _commitAllChangesAsync(message: string): Promise<string> {
+        await this.git(["add", "-A"]);
+        await this.git(["commit", "--allow-empty", "-m", message]);
+        return this.git(["rev-parse", "HEAD"]);
+    }
+
+    /**
+     * Overlays a historical snapshot onto the active working directory,
+     * staging and committing the changes forward to maintain direct linearity.
+     *
+     * Throws if the worktree is dirty so in-progress changes are never
+     * silently discarded by the checkout.
+     *
+     * After checking out, runs `git clean -fd` to remove any untracked files
+     * that were added after the checkpoint, ensuring the working tree exactly
+     * mirrors the historic snapshot before committing forward.
+     */
+    private async _restoreCheckpointAsync(
+        commitSha: string,
+        message: string
+    ): Promise<void> {
+        // Detect uncommitted changes (staged or unstaged) before overwriting.
+        const isDirty = await this.git(["status", "--porcelain"]).then(
+            out => out.length > 0
+        );
+
+        if (isDirty) {
+            throw new Error(
+                "GitSandbox: cannot restore checkpoint — worktree has uncommitted changes. " +
+                    "Commit or discard them first."
+            );
+        }
+
+        await this.git(["checkout", commitSha, "--", "."]);
+        // Remove untracked files/directories added after commitSha so the
+        // working tree is an exact mirror of the snapshot, not just a partial overlay.
+        await this.git(["clean", "-fd"]);
+        await this.git(["add", "-A"]);
+        await this.git(["commit", "-m", message]);
+    }
+
+    /**
+     * Compares the current working tree against the staging area.
+     * Captures ONLY unstaged local changes; modifications already added via
+     * `git add` are not included.
+     *
+     * FIX: Consistent with other diff methods — GIT_PAGER=cat in the env already
+     * suppresses the pager, so --no-pager is not needed here.
+     */
+    private async _getGitDiffAsync(): Promise<string> {
+        return this.git(["diff"]);
+    }
+
+    /**
+     * Returns the exact full commit SHA currently referenced by HEAD.
+     */
+    private async _getHeadShaAsync(): Promise<string> {
+        return this.git(["rev-parse", "HEAD"]);
+    }
 }
