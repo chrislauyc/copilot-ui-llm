@@ -78,6 +78,14 @@ export async function runDockerProcess(
     if (child.stdin.writable) {
       child.stdin.write(command + "\n");
       child.stdin.end();
+    } else {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      child.kill("SIGKILL");
+      resolve({
+        stdout: "",
+        stderr: "Docker process stdin not writable — container may not be running.",
+        exitCode: 1,
+      });
     }
   });
 }
