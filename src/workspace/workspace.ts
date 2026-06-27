@@ -47,6 +47,4 @@ export function getGitSandbox(): GitSandbox {
  */
 export function getExecCommand() {
   return getRunner().execCommand;
-}  const runner = getRunner();
-  return new GitSandbox(runner.getWorkspaceRoot(), runner.getGitDir());
 }
