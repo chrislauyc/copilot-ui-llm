@@ -6,6 +6,11 @@ import * as path from "path";
 const FIXED_GIT_PATH = "/usr/bin/git";
 const execFileAsync = util.promisify(execFile);
 
+// Maximum time to wait for any single git operation. Git should never
+// block for long in a local sandbox — if it does, something is wrong
+// (e.g. a credential prompt, a stale lock file) and we want to fail loudly.
+const GIT_TIMEOUT_MS = 30_000;
+
 export class GitSandbox {
     private readonly workTree: string;
     private readonly gitDir: string;
@@ -41,6 +46,7 @@ export class GitSandbox {
         try {
             const ret = await execFileAsync(FIXED_GIT_PATH, args, {
                 cwd: this.workTree,
+                signal: AbortSignal.timeout(GIT_TIMEOUT_MS),
                 env: {
                     HOME: this.workTree,
                     // FIX: USER must be a username string, not a directory path.
@@ -52,6 +58,11 @@ export class GitSandbox {
             });
             return ret.stdout ? ret.stdout.trim() : "";
         } catch (e: any) {
+            if (e.name === "AbortError") {
+                throw new Error(
+                    `Git command timed out after ${GIT_TIMEOUT_MS / 1000}s: git ${args.join(" ")}`
+                );
+            }
             const message = e.stderr ? e.stderr.trim() : e.message;
             throw new Error(`Git command failed (exit ${e.code}): ${message}`);
         }
