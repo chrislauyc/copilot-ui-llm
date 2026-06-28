@@ -25,7 +25,7 @@ import { runSpecAudit } from './src/gates/specAuditor';
 import { sanitizeSensitives } from './src/utils/sanitizers';
 import { truncateOutput } from './src/utils/formatters';
 import { getIsolatedName, getWorkspaceHash, activeContainers, syncWorkspace, validateGitWorktree, cleanupWorkspaceDir } from './src/utils/workspace';
-import * as gitManager from './src/utils/git';
+import { initializeWorkspace, getGitSandbox } from './src/workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from './src/utils/contextManager';
 import { fetchStubbedTraceResponse } from './src/utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from './src/utils/escalationStore';
@@ -799,6 +799,8 @@ export { db } from './src/db/index';
 export { appendEscalation, getPendingEscalation, getEscalations } from './src/utils/escalationStore';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
+await initializeWorkspace();
+
   // Global middleware to log all HTTP responses and errors
   app.use((req, res, next) => {
     res.on('finish', () => {
@@ -966,13 +968,11 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
   // Endpoint to get the git diff and modification stats
   app.get('/api/git/diff', async (req, res) => {
     try {
-      // static import gitManager
-      
       let diffStdout = '';
       let statStdout = '';
       try {
-        diffStdout = await gitManager.getGitDiffHead(process.cwd());
-        statStdout = await gitManager.getGitDiffHeadNumstat(process.cwd());
+        diffStdout = await getGitSandbox().getGitDiffHead();
+        statStdout = await getGitSandbox().getGitDiffHeadNumstat();
       } catch (e) {
         // If git diff fails (e.g. not a git repo), fail gracefully
         diffStdout = '';
@@ -1863,13 +1863,6 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       }
 
       const runCwd = getWorkspaceRoot() !== process.cwd() ? getWorkspaceRoot() : (cwd || DEFAULT_WORKSPACE_DIR);
-      
-      try {
-        // static import gitManager
-        gitManager.initializeGitSandboxSync(runCwd);
-      } catch (err: any) {
-        writeLog(`[GateLoop] Failed to initialize isolated git: ${err.message}`);
-      }
 
       const startModel = model || 'gemini-3.1-flash-lite';
 
@@ -2743,7 +2736,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
             if (sessionId && activeSessions.has(sessionId)) {
               const sessionRec = activeSessions.get(sessionId)!;
               try {
-                const currentSha = await gitManager.getHeadShaAsync(runCwd);
+                const currentSha = await getGitSandbox().getHeadShaAsync();
                 if ((sessionRec as any).lastPassedSpecAuditSha === currentSha) {
                   skipSpecAudit = true;
                   writeLog(`[GateLoop] Skipping Spec-Gate Auditor: Diff is identical to last passing state (SHA: ${currentSha})`);
@@ -2775,7 +2768,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
               if (specResult.pass && sessionId && activeSessions.has(sessionId)) {
                 const sessionRec = activeSessions.get(sessionId)!;
                 try {
-                  const currentSha = await gitManager.getHeadShaAsync(runCwd);
+                  const currentSha = await getGitSandbox().getHeadShaAsync();
                   (sessionRec as any).lastPassedSpecAuditSha = currentSha;
                 } catch (e) {}
               }
@@ -2817,9 +2810,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
           const taskLabel = promptStr.length > 50 ? promptStr.slice(0, 47) + '...' : promptStr;
           
           try {
-            // static import gitManager
-            await gitManager.initializeGitSandboxAsync(runCwd);
-            commitSha = await gitManager.commitAllChangesAsync(runCwd, `Turn Completed: ${taskLabel}`);
+            commitSha = await getGitSandbox().commitAllChangesAsync(`Turn Completed: ${taskLabel}`);
           } catch (e: any) {
             // suppress git error output
           }
@@ -3224,7 +3215,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       const commitMessage = `Restore to Checkpoint: ${taskLabel || 'Unknown Task'}`;
       writeLog(`[Checkpoint] Projecting state from ${commitSha} onto ${runCwd} and appending snapshot commit.`);
-      await gitManager.restoreCheckpointAsync(runCwd, commitSha, commitMessage);
+      await getGitSandbox().restoreCheckpointAsync(commitSha, commitMessage);
 
       res.json({ success: true, message: 'Checkpoint restored successfully.' });
     } catch (err: any) {

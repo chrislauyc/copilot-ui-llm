@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
 import { submitSpecAuditTool } from '../config/tools';
-import { getGitDiffSync } from '../utils/git';
+import { getGitSandbox } from '../workspace';
 
 import { getWorkspaceRoot } from '../utils/sandbox';
 
@@ -19,7 +19,7 @@ export async function runSpecAudit(cwd: string): Promise<{ pass: boolean; feedba
     // 1. Get git diff against active container sandbox worktree
     let diff = '';
     try {
-      diff = getGitDiffSync(targetCwd);
+      diff = await getGitSandbox().getGitDiffAsync();
     } catch (e: any) {
       diff = e.stdout?.toString() || '';
     }

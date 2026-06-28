@@ -4,6 +4,7 @@ import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
 import { cleanupWorkspaceDir } from '../utils/workspace';
+import { initializeWorkspace, getGitSandbox } from '../workspace';
 
 describe('Spec-Gate Auditor Validation Tests', () => {
   beforeAll(async () => {
@@ -30,13 +31,14 @@ describe('Spec-Gate Auditor Validation Tests', () => {
 
     // Initialize git and commit a baseline to simulate active changes
     console.log('Initializing local mock git structure inside test workspace...');
-    const gitManager = await import('../utils/git');
-    gitManager.initializeGitSandboxSync(tempCwd);
+    await initializeWorkspace();
+    const sandbox = getGitSandbox();
+    await sandbox.initializeGitSandboxAsync();
     
     fs.writeFileSync(path.join(tempCwd, 'architecture-spec.md'), 'Spec: Must conform to specs.');
     fs.writeFileSync(path.join(tempCwd, 'temp.txt'), 'baseline state');
     
-    gitManager.commitAllChangesSync(tempCwd, "initial specs commit");
+    await sandbox.commitAllChangesAsync("initial specs commit");
     
     // Make a modification to create unstaged changes (meaning git diff is non-empty)
     fs.writeFileSync(path.join(tempCwd, 'temp.txt'), 'baseline state - modified with unstaged edits');

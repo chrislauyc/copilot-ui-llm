@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { initializeWorkspace, getGitSandbox } from '../workspace';
 import { cleanupWorkspaceDir } from '../utils/workspace';
 import { serverHarness } from './harness/ServerHarness';
 
@@ -39,16 +40,17 @@ describe('Scenario 5: Checkpoint restore success', () => {
 
     try {
       // Set up a real git sandbox directly — no server session needed.
-      const gitManager = await import('../utils/git');
-      gitManager.initializeGitSandboxSync(tempCwd);
+      await initializeWorkspace();
+      const sandbox = getGitSandbox();
+      await sandbox.initializeGitSandboxAsync();
 
       fs.writeFileSync(path.join(tempCwd, 'v.txt'), 'v1');
-      const sha = gitManager.commitAllChangesSync(tempCwd, 'initial').trim();
+      const sha = (await sandbox.commitAllChangesAsync('initial')).trim();
 
       // Write an update and also add a new file that wasn't in v1
       fs.writeFileSync(path.join(tempCwd, 'v.txt'), 'v2');
       fs.writeFileSync(path.join(tempCwd, 'new_file.txt'), 'i_am_new');
-      gitManager.commitAllChangesSync(tempCwd, 'update');
+      await sandbox.commitAllChangesAsync('update');
 
       // Verify both files exist before restoring
       assert.strictEqual(fs.readFileSync(path.join(tempCwd, 'v.txt'), 'utf8'), 'v2');
