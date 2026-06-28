@@ -15,6 +15,7 @@ export class GitSandbox {
     private readonly workTree: string;
     private readonly gitDir: string;
     private busy = false;
+    private initialized = false;
 
     constructor(workTree: string, gitDir: string) {
         this.workTree = workTree;
@@ -116,6 +117,13 @@ export class GitSandbox {
      * Roots baseline exclusions to the snapshots folder.
      */
     private async _initializeGitSandboxAsync(): Promise<void> {
+        if (this.initialized) {
+            throw new Error(
+                "GitSandbox: initializeGitSandboxAsync() has already been called on this instance."
+            );
+        }
+        this.initialized = true;
+
         // A valid git repo always has a HEAD file. Checking for it (rather than
         // just the directory) avoids silently skipping a previously interrupted init.
         const headPath = path.join(this.gitDir, "HEAD");
