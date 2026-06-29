@@ -1,6 +1,7 @@
 import { truncateOutput } from './formatters';
 import { sanitizeSensitives } from './sanitizers';
-import { runDockerProcess } from './dockerRunner';
+import { getExecCommand } from '../workspace';
+
 
 export function makeDockerToolHandler(
   secureWrite: Function,
@@ -22,7 +23,8 @@ export function makeDockerToolHandler(
     }
 
     writeLog(`[run_terminal_docker] Running command: "${args.command}" inside ${args.workingDir || '/workspace'}`);
-    const result = await runDockerProcess(args.command, args.workingDir || '/workspace', abortSignal, sessionId);
+    const execCommand = getExecCommand();
+    const result = await execCommand(args.command, abortSignal);
 
     writeLog(`[run_terminal_docker] Completed with exit code ${result.exitCode}. Stdout length: ${result.stdout.length}, Stderr length: ${result.stderr.length}`);
     
