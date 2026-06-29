@@ -52,3 +52,10 @@ export function getGitSandbox(): GitSandbox {
 export function getExecCommand() {
   return getRunner().execCommand;
 }
+
+/**
+ * Returns the workspace root bound to the appropriate runner.
+ */
+export function getWorkspaceRoot(): string {
+  return getRunner().getWorkspaceRoot();
+}

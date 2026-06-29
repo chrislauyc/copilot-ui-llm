@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 
 describe('Human Escalation Missing Input Tests', () => {
   beforeAll(async () => {
@@ -20,7 +20,7 @@ describe('Human Escalation Missing Input Tests', () => {
 
     const tempCwd = path.join(process.cwd(), 'tmp-human-escalation-missing-input');
     if (fs.existsSync(tempCwd)) {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
     fs.mkdirSync(tempCwd, { recursive: true });
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
@@ -105,7 +105,7 @@ describe('Human Escalation Missing Input Tests', () => {
       assert.ok(streamedData.includes('Proceeding based on default resume pathway'), 'Should fallback gracefully and proceed with default resume text');
     } finally {
       if (fs.existsSync(tempCwd)) {
-        cleanupWorkspaceDir(tempCwd);
+        fs.rmSync(tempCwd, { recursive: true, force: true });
       }
     }
   });

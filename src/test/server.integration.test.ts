@@ -1,9 +1,7 @@
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as os from 'os';
+import { getExecCommand } from '../workspace';
 
 describe('Server End-to-End Integration Tests', () => {
   beforeAll(async () => {
@@ -22,58 +20,26 @@ describe('Server End-to-End Integration Tests', () => {
 
     // Create unique sessionId and tempCwd
     const sessionId = 'session-' + Math.random().toString(36).substring(2, 8);
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'git-worktree-'));
+    const tempCwd = `/tmp/git-worktree-${sessionId}`;
+    const snapshotPath = process.cwd() + '/src/test/snapshots/gate_loop/single_retry_server_integration.yaml';
     
+    const exec = getExecCommand();
+    await exec(`mkdir -p '${tempCwd}'`);
+    await exec(`echo '{"name":"mock-integration-workspace","scripts":{"lint":"echo \\"Lint Passed\\" && exit 0","test":"echo \\"FAIL: 2 tests failed\\\\ngate: failed\\" && exit 1"}}' > '${tempCwd}/package.json'`);
+    await exec(`echo 'gitdir: /fake/path' > '${tempCwd}/.git'`);
+
     try {
-      // 2. Load the Snapshot
-      const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/single_retry_server_integration.yaml');
-      
-      // We need to write the snapshot first for this specific scenario
-      fs.writeFileSync(snapshotPath, `models:
-  - claude-sonnet-4.5
-conversations:
-  - messages:
-      - role: system
-        content: \${system}
-      - role: user
-        content: Run the gate check.
-      - role: assistant
-        tool_calls:
-          - id: toolcall_0
-            type: function
-            function:
-              name: run_tests
-              arguments: '{"target":"tests","flags":[]}'
-  - messages:
-      - role: system
-        content: \${system}
-      - role: user
-        content: Run the gate check.
-      - role: assistant
-        tool_calls:
-          - id: toolcall_0
-            type: function
-            function:
-              name: run_tests
-              arguments: '{"target":"tests","flags":[]}'
-      - role: tool
-        tool_call_id: toolcall_0
-        content: |-
-          FAIL: 2 tests failed
-          gate: failed
-      - role: assistant
-        content: The gate failed. 2 tests need fixing.
-`);
-
-      // Set up a mock git worktree so server.ts validation passes
-      fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
-
       await proxy.updateConfig({
         filePath: snapshotPath,
         workDir: tempCwd,
       });
+
+      // Override the taskType classifier to run the runTests gate
+      await proxy.setOverrides({
+        taskType: 'test-only'
+      });
       
-      // 4. Send request to /api/copilot/gate-run
+      // Send request to /api/copilot/gate-run
       console.log('Sending request to /api/copilot/gate-run');
 
       const res = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/gate-run`, {
@@ -109,9 +75,7 @@ conversations:
         throw new Error('Did not find expected response. Final Data: ' + finalData);
       }
     } finally {
-      try {
-        fs.rmSync(tempCwd, { recursive: true, force: true });
-      } catch (e) {}
+      await exec(`rm -rf '${tempCwd}'`);
     }
   });
 });

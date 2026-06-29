@@ -1,13 +1,9 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
 import { submitSpecAuditTool } from '../config/tools';
-import { getGitSandbox } from '../workspace';
-
-import { getWorkspaceRoot } from '../utils/sandbox';
+import { getGitSandbox, getExecCommand } from '../workspace';
 
 export async function runSpecAudit(cwd: string): Promise<{ pass: boolean; feedback: string }> {
-  const targetCwd = getWorkspaceRoot() !== process.cwd() ? getWorkspaceRoot() : cwd;
+  const targetCwd = cwd;
   const executionConfig = getAuditorExecutionConfig();
 
   try {
@@ -27,9 +23,11 @@ export async function runSpecAudit(cwd: string): Promise<{ pass: boolean; feedba
 
     // 2. Read architecture-spec.md
     let spec = '';
-    const specPath = path.join(targetCwd, 'architecture-spec.md');
-    if (fs.existsSync(specPath)) {
-      spec = fs.readFileSync(specPath, 'utf8');
+    const execResult = await getExecCommand()(
+      targetCwd ? `cd '${targetCwd}' && cat architecture-spec.md` : 'cat architecture-spec.md'
+    );
+    if (execResult.exitCode === 0) {
+      spec = execResult.stdout;
       console.log('[runSpecAudit] Spec found, length:', spec.length);
     } else {
       console.log('[runSpecAudit] No spec found.');

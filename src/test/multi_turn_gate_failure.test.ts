@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 
 describe('Multi-Turn Gate Failure Persistence Tests', () => {
   beforeAll(async () => {
@@ -25,7 +25,7 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
     // Set up a mock workspaces directory
     const tempCwd = path.join(process.cwd(), 'tmp-multi-turn-workspace');
     if (fs.existsSync(tempCwd)) {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
     fs.mkdirSync(tempCwd, { recursive: true });
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
@@ -117,7 +117,7 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
     } finally {
       // Clean up temporary workspace
       if (fs.existsSync(tempCwd)) {
-        cleanupWorkspaceDir(tempCwd);
+        fs.rmSync(tempCwd, { recursive: true, force: true });
       }
     }
   });

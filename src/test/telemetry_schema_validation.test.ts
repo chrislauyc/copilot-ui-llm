@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 
 describe('Telemetry Schema and History Validation Tests', () => {
   beforeAll(async () => {
@@ -24,7 +24,7 @@ describe('Telemetry Schema and History Validation Tests', () => {
     
     const tempCwd = path.join(process.cwd(), 'tmp-telemetry-validation-workspace');
     if (fs.existsSync(tempCwd)) {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
     fs.mkdirSync(tempCwd, { recursive: true });
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
@@ -113,7 +113,7 @@ describe('Telemetry Schema and History Validation Tests', () => {
       console.log('✓ Telemetry schema validation verified!');
     } finally {
       if (fs.existsSync(tempCwd)) {
-        cleanupWorkspaceDir(tempCwd);
+        fs.rmSync(tempCwd, { recursive: true, force: true });
       }
     }
   });

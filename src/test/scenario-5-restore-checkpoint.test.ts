@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { initializeWorkspace, getGitSandbox } from '../workspace';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 import { serverHarness } from './harness/ServerHarness';
 
 /**
@@ -79,7 +79,7 @@ describe('Scenario 5: Checkpoint restore success', () => {
       const fileExists = fs.existsSync(path.join(tempCwd, 'new_file.txt'));
       assert.strictEqual(fileExists, false, 'Files added after the checkpoint should be removed');
     } finally {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
   });
 });

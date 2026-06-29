@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 import { CapiProxy } from './harness/CapiProxy';
 
 describe('Scenario 3: Mutation gate failure (SYS-REQ-004)', () => {
@@ -80,7 +80,7 @@ describe('Scenario 3: Mutation gate failure (SYS-REQ-004)', () => {
       assert.ok(finalData.includes('"gateName":"MutationGate"'), 'Should fail with MutationGate');
       assert.ok(finalData.includes('Plain text explanations are blocked for mutation tasks'), 'Should include MutationGate feedback');
     } finally {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
   });
 });

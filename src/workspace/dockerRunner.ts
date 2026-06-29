@@ -12,7 +12,7 @@ let CONTAINER_NAME = "";
 
 function getContainerName(): string {
   if (!CONTAINER_NAME) {
-    CONTAINER_NAME = process.env.CONTAINER_NAME;
+    CONTAINER_NAME = process.env.CONTAINER_NAME || "";
     if (!CONTAINER_NAME) {
       throw new Error(
         "CONTAINER_NAME environment variable is not set. Please ensure the container name is provided.",

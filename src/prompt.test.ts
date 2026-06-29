@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import assert from 'node:assert';
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt } from './utils/prompt';
-import { getIsolatedName, getWorkspaceHash } from './utils/workspace';
+import { getIsolatedName, getWorkspaceHash } from './utils/sandbox';
 import { processEvents } from './test/utils/eventProcessor';
 import { SIMULATOR_SSE_EVENTS, FAILED_SIMULATOR_SSE_EVENTS } from './test/fixtures/mockStreamPayloads';
 

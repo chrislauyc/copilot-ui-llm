@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-export const isTestMode = process.env.NODE_ENV === 'test' || process.env.DIAGNOSTIC_MODE === 'true';
+export const isTestMode = process.env.NODE_ENV === 'test';
 
 // Use /tmp for the databases to avoid polluting the workspace root and triggering
 // file watcher/tracking layer resets.

@@ -3,13 +3,13 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runTests, runWithTimeout } from '../gates';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 
 describe('runTests Gate Unit Tests', () => {
   it('runTests returns success true for a workspace with a passing test script', async () => {
     const tempDir = path.resolve(process.cwd(), 'tmp-test-passing-workspace');
     if (fs.existsSync(tempDir)) {
-      cleanupWorkspaceDir(tempDir);
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
     fs.mkdirSync(tempDir, { recursive: true });
 
@@ -28,7 +28,7 @@ describe('runTests Gate Unit Tests', () => {
       assert.match(res.output, /All tests passed successfully!/);
     } finally {
       if (fs.existsSync(tempDir)) {
-        cleanupWorkspaceDir(tempDir);
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
     }
   });
@@ -36,7 +36,7 @@ describe('runTests Gate Unit Tests', () => {
   it('runTests returns success false for a workspace with a failing test script', async () => {
     const tempDir = path.resolve(process.cwd(), 'tmp-test-failing-workspace');
     if (fs.existsSync(tempDir)) {
-      cleanupWorkspaceDir(tempDir);
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
     fs.mkdirSync(tempDir, { recursive: true });
 
@@ -55,7 +55,7 @@ describe('runTests Gate Unit Tests', () => {
       assert.match(res.output, /FAIL: 1 test failed/);
     } finally {
       if (fs.existsSync(tempDir)) {
-        cleanupWorkspaceDir(tempDir);
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
     }
   });

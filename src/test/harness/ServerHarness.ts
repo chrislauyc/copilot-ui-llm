@@ -36,7 +36,6 @@ class ServerHarness {
     process.env.OPENAI_COMPAT_BASE_URL = this.proxyUrl;
     process.env.NODE_ENV = 'test';
     process.env.GEMINI_API_KEY = 'test-key';
-    process.env.DIAGNOSTIC_MODE = 'false';
 
     try {
       // 3. Dynamic import of server.ts (it exports the Express app)

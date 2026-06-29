@@ -1,4 +1,3 @@
-import fs from 'fs';
 
 async function run() {
   const res = await fetch('http://localhost:3000/api/copilot/gate-run', {

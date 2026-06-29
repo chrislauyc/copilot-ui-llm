@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 import { initializeWorkspace, getGitSandbox } from '../workspace';
 
 describe('Spec-Gate Auditor Validation Tests', () => {
@@ -25,7 +25,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
     
     const tempCwd = path.join(process.cwd(), 'tmp-spec-workspace');
     if (fs.existsSync(tempCwd)) {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
     fs.mkdirSync(tempCwd, { recursive: true });
 
@@ -104,7 +104,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
       console.log('✓ Spec-Gate Auditor integration test validated successfully!');
     } finally {
       if (fs.existsSync(tempCwd)) {
-        cleanupWorkspaceDir(tempCwd);
+        fs.rmSync(tempCwd, { recursive: true, force: true });
       }
     }
   });

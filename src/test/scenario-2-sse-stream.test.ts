@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 import { CapiProxy } from './harness/CapiProxy';
 
 describe('Scenario 2: Composer router picks non-feature taskType (style-only)', () => {
@@ -79,7 +79,7 @@ describe('Scenario 2: Composer router picks non-feature taskType (style-only)', 
       assert.ok(!finalData.includes('"gateName":"runTests"'), 'Should NOT run runTests');
       assert.ok(!finalData.includes('"gateName":"runAudit"'), 'Should NOT run runAudit');
     } finally {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
   });
 });

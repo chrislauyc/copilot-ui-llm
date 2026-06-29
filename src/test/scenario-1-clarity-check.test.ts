@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 import { CapiProxy } from './harness/CapiProxy';
 
 describe('Scenario 1: Clarity check fails (score < 0.85) -> loop.clarity_check_failed', () => {
@@ -71,7 +71,7 @@ describe('Scenario 1: Clarity check fails (score < 0.85) -> loop.clarity_check_f
       assert.ok(finalData.includes('target architecture'), 'Should include missing variables');
       
     } finally {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
   });
 });

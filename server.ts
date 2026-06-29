@@ -17,14 +17,12 @@ import { SessionRecord, StateSnapshot, CopilotEventData, Turn } from './src/type
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './src/utils/prompt';
 import { makeDockerToolHandler } from './src/utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './src/config/tools';
-import { getWorkspaceRoot, getDefaultWorkspaceDir } from './src/utils/sandbox';
-
+import { getWorkspaceRoot, getDefaultWorkspaceDir, getWorkspaceHash, getIsolatedName } from './src/utils/sandbox';
 
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from './src/config/gates';
 import { runSpecAudit } from './src/gates/specAuditor';
 import { sanitizeSensitives } from './src/utils/sanitizers';
 import { truncateOutput } from './src/utils/formatters';
-import { getWorkspaceHash, validateGitWorktree, cleanupWorkspaceDir } from './src/utils/workspace';
 import { initializeWorkspace, getGitSandbox, getExecCommand } from './src/workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from './src/utils/contextManager';
 import { fetchStubbedTraceResponse } from './src/utils/traceRegistry';
@@ -36,6 +34,22 @@ if (process.env.NODE_ENV !== 'test') {
 
 // --- GLOBAL ORPHAN CLEANUP ---
 
+
+async function cleanupOrphans() {
+  try {
+    const files = fs.readdirSync(process.cwd());
+    const tempDirs = files.filter(f => f.startsWith('tmp-') && fs.statSync(path.join(process.cwd(), f)).isDirectory());
+    for (const dir of tempDirs) {
+      const fullPath = path.join(process.cwd(), dir);
+      if (fullPath.startsWith('/tmp')) {
+          const exec = getExecCommand();
+          await exec(`rm -rf '${fullPath}'`);
+      }
+    }
+  } catch (e) {
+    console.error('[Cleanup] Failed to cleanup orphans:', e);
+  }
+}
 
 if (process.env.NODE_ENV !== 'test') {
   ['SIGINT', 'SIGTERM', 'uncaughtException'].forEach((signal) => {
@@ -61,7 +75,7 @@ if (!process.env.COPILOT_CLI_PATH) {
   process.env.COPILOT_CLI_PATH = path.join(process.cwd(), 'node_modules', '@github', 'copilot', 'npm-loader.js');
 }
 
-const LOG_FILE = path.join(process.cwd(), 'debug_log.txt');
+const LOG_FILE = path.join('/tmp', 'debug_log.txt');
 export const lastRunLog: string[] = [];
 
 const DEFAULT_WORKSPACE_DIR = getDefaultWorkspaceDir();
@@ -293,14 +307,14 @@ async function getGlobalClient(cwd?: string): Promise<CopilotClient> {
       let finalCwd = DEFAULT_WORKSPACE_DIR;
       if (cwd) {
         try {
-          if (fs.existsSync(cwd)) {
+          const makeDirResult = await getExecCommand()(`mkdir -p '${cwd}'`);
+          if (makeDirResult.exitCode === 0) {
             finalCwd = cwd;
           } else {
-            fs.mkdirSync(cwd, { recursive: true });
-            finalCwd = cwd;
+            throw new Error(makeDirResult.stderr);
           }
-        } catch (err) {
-          writeLog(`[SDK] Working directory ${cwd} does not exist and could not be created, falling back to ${DEFAULT_WORKSPACE_DIR}`);
+        } catch (err: any) {
+          writeLog(`[SDK] Working directory ${cwd} does not exist and could not be created, falling back to ${DEFAULT_WORKSPACE_DIR}. Error: ${err.message}`);
           finalCwd = DEFAULT_WORKSPACE_DIR;
         }
       }
@@ -326,65 +340,61 @@ async function getGlobalClient(cwd?: string): Promise<CopilotClient> {
   return initializationPromise;
 }
 
-function getCodeState(
-  dir: string,
-  baseDir: string = dir,
-  context: { fileCount: number; totalSize: number; seenPaths?: Set<string> } = { fileCount: 0, totalSize: 0, seenPaths: new Set<string>() }
-): string {
-  let result = '';
+async function getCodeState(dir: string): Promise<string> {
+  const execCommand = getExecCommand();
   const MAX_FILES = 100;
   const MAX_AGGREGATE_SIZE = 80000; // 80 KB limit for context safety
 
-  if (!context.seenPaths) {
-    context.seenPaths = new Set<string>();
-  }
-
-  let realPath = dir;
   try {
-    realPath = fs.realpathSync(dir);
-  } catch (e) {
-    realPath = path.resolve(dir);
-  }
+    const findCmd = `cd '${dir}' && find . -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.json" -o -name "*.html" -o -name "*.css" -o -name "*.md" \\) ! -path "*/node_modules/*" ! -path "*/dist/*" ! -path "*/.git/*" ! -name "package-lock.json" ! -name ".env"`;
+    const findResult = await execCommand(findCmd);
+    if (findResult.exitCode !== 0) {
+      writeLog(`[getCodeState] find command failed: ${findResult.stderr}`);
+      return '';
+    }
 
-  if (context.seenPaths.has(realPath)) {
-    return '\n\n--- [RECURSIVE CYCLE PREVENTED] ---';
-  }
-  context.seenPaths.add(realPath);
+    const files = findResult.stdout
+      .split('\n')
+      .map(f => f.trim())
+      .filter(f => f && f !== '.');
 
-  try {
-    const files = fs.readdirSync(dir);
-    for (const file of files) {
-      if (context.fileCount >= MAX_FILES || context.totalSize >= MAX_AGGREGATE_SIZE) {
+    let result = '';
+    let fileCount = 0;
+    let totalSize = 0;
+
+    for (const relPath of files) {
+      if (fileCount >= MAX_FILES || totalSize >= MAX_AGGREGATE_SIZE) {
         result += '\n\n--- [CODEBASE TRUNCATED DUE TO SIZE LIMITS] ---';
         break;
       }
-      const fullPath = path.join(dir, file);
-      if (file === 'node_modules' || file === 'dist' || file === '.git' || file === 'package-lock.json' || file === '.env') {
+
+      const sizeCmd = `cd '${dir}' && wc -c < '${relPath}'`;
+      const sizeResult = await execCommand(sizeCmd);
+      if (sizeResult.exitCode !== 0) {
         continue;
       }
-      const stat = fs.lstatSync(fullPath);
-      if (stat.isSymbolicLink()) {
-        continue; // Skip symlinks entirely to prevent infinite recursion and stack overflow
+      const size = parseInt(sizeResult.stdout.trim(), 10);
+      if (isNaN(size) || size >= 50000 || (totalSize + size) >= MAX_AGGREGATE_SIZE) {
+        continue;
       }
-      if (stat.isDirectory()) {
-        result += getCodeState(fullPath, baseDir, context);
-      } else if (stat.isFile()) {
-        const ext = path.extname(file);
-        if (['.ts', '.tsx', '.js', '.jsx', '.json', '.html', '.css', '.md'].includes(ext)) {
-          if (stat.size < 50000 && (context.totalSize + stat.size) < MAX_AGGREGATE_SIZE) {
-             const content = fs.readFileSync(fullPath, 'utf8');
-             const relPath = path.relative(baseDir, fullPath);
-             result += `\n\n--- File: ${relPath} ---\n\`\`\`${ext.slice(1)}\n${content}\n\`\`\``;
-             context.fileCount++;
-             context.totalSize += stat.size;
-          }
-        }
+
+      const catCmd = `cd '${dir}' && cat '${relPath}'`;
+      const catResult = await execCommand(catCmd);
+      if (catResult.exitCode !== 0) {
+        continue;
       }
+
+      const ext = relPath.substring(relPath.lastIndexOf('.'));
+      result += `\n\n--- File: ${relPath.replace(/^\.\//, '')} ---\n\`\`\`${ext.slice(1)}\n${catResult.stdout}\n\`\`\``;
+      fileCount++;
+      totalSize += size;
     }
+
+    return result;
   } catch (err) {
     writeLog(`[getCodeState] Error reading codebase: ${err}`);
+    return '';
   }
-  return result;
 }
 
 async function runCommand(command: string, signal?: AbortSignal) {
@@ -776,9 +786,7 @@ export { db } from './src/db/index';
 export { appendEscalation, getPendingEscalation, getEscalations } from './src/utils/escalationStore';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-await initializeWorkspace();
-
-  // Global middleware to log all HTTP responses and errors
+// Global middleware to log all HTTP responses and errors
   app.use((req, res, next) => {
     res.on('finish', () => {
       if (res.statusCode >= 400) {
@@ -1084,18 +1092,6 @@ await initializeWorkspace();
   app.get('/api/diagnostics/gates', async (req, res) => {
     try {
       const runCwd = process.cwd();
-      const isIntegrityCheck = req.query.type === 'ENVIRONMENT_INTEGRITY_CHECK';
-      
-      const isDiag = getWorkspaceRoot() !== process.cwd();
-      if (isIntegrityCheck && isDiag) {
-        res.json({
-          runWithTimeout: { pass: true, durationMs: 5 },
-          runTests: { pass: true, output: 'Environment Integrity Check Pass: Pre-allocated Sandbox verified.', durationMs: 2 },
-          runLint: { pass: true, output: 'Syntax & Style Probe Pass: Out-of-band lint validation successful.', durationMs: 1 },
-          fallbackUsed: false
-        });
-        return;
-      }
       
       const timeoutStart = Date.now();
       let timeoutPass = true;
@@ -1207,26 +1203,7 @@ await initializeWorkspace();
     req.on('close', () => controller.abort());
 
     try {
-      const isIntegrityCheck = req.query.type === 'ENVIRONMENT_INTEGRITY_CHECK';
-      
-      const isDiag = getWorkspaceRoot() !== process.cwd();
-      // Let's check local diagnostic mode and out-of-band sandbox environment health
-      if (isIntegrityCheck || isDiag) {
-        const durationMs = Date.now() - start;
-        res.json({
-          pass: true,
-          stdout: 'Sandbox Environment Integrity: OK\nDiagnostic Mode: ACTIVE\nAll gate loops redirected out-of-band.',
-          exitCode: 0,
-          durationMs
-        });
-        return;
-      }
 
-      // Check Git worktree validity in server before initiating mount
-      const gitValidation = validateGitWorktree(process.cwd());
-      if (!gitValidation.valid) {
-        throw new Error(`Blocking Initialization Error: Refusing to mount. Workspace .git must not be a directory.`);
-      }
 
       const result = await runCommand('echo "exec-ok"', controller.signal);
       const durationMs = Date.now() - start;
@@ -1388,7 +1365,7 @@ await initializeWorkspace();
 
       if (isRequestClosed) return;
 
-      const inputCwd = getWorkspaceRoot() !== process.cwd() ? getWorkspaceRoot() : (cwd as string);
+      const inputCwd = cwd as string;
 
       // Access the persistent global Copilot Client instead of recreation
       const client = await getGlobalClient(inputCwd || DEFAULT_WORKSPACE_DIR);
@@ -1752,7 +1729,7 @@ await initializeWorkspace();
 
       writeLog(`[API Request] POST /api/copilot/gate-run: isResume=${isResume}, model=${model || 'default'}, cwd=${cwd || 'default'}, sessionId=${sessionId || 'none'}`);
 
-      const isDiag = getWorkspaceRoot() !== process.cwd();
+      const isDiag = false;
       const isDiagnostic = (!!diagnosticScenario || !!replayTraceId) && isDiag;
       const scenario = isDiagnostic && diagnosticScenario ? DIAGNOSTIC_SCENARIOS[diagnosticScenario as string] : null;
 
@@ -1836,7 +1813,7 @@ await initializeWorkspace();
         return;
       }
 
-      const runCwd = getWorkspaceRoot() !== process.cwd() ? getWorkspaceRoot() : (cwd || DEFAULT_WORKSPACE_DIR);
+      const runCwd = cwd || DEFAULT_WORKSPACE_DIR;
 
       const startModel = model || 'gemini-3.1-flash-lite';
 
@@ -1856,16 +1833,6 @@ await initializeWorkspace();
         return;
       }
 
-      // ... gitValidation code...
-      const gitValidation = validateGitWorktree(runCwd);
-      if (!isDiagnostic && !gitValidation.valid) {
-        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end(gitValidation.error);
-        if (currentSessionId) {
-          activeLocks.delete(currentSessionId);
-        }
-        return;
-      }
 
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -2570,7 +2537,7 @@ await initializeWorkspace();
                   };
                 } else if (gateName === 'runAudit') {
                   const startAuditTime = Date.now();
-                  const currentCodeState = getCodeState(runCwd);
+                  const currentCodeState = await getCodeState(runCwd);
                   const auditPayload = await runLlmAudit(promptStr, currentCodeState, keyToUse);
                   const loopPassed = auditPayload.pass;
                   
@@ -2998,10 +2965,8 @@ await initializeWorkspace();
     try {
       const workspaceHash = getWorkspaceHash(currentSessionId || undefined);
       const targetTempDir = path.join(process.cwd(), `tmp-${workspaceHash}`);
-      if (fs.existsSync(targetTempDir)) {
-        cleanupWorkspaceDir(targetTempDir);
-        writeLog(`[CleanupGuard] Scrubbed local runtime temporary worktree directory: ${targetTempDir}`);
-      }
+      await getExecCommand()(`rm -rf '${targetTempDir}'`);
+      writeLog(`[CleanupGuard] Scrubbed local runtime temporary worktree directory: ${targetTempDir}`);
     } catch (dirErr: any) {
       writeLog(`[CleanupGuard] Error scrub-cleaning temporary directories: ${dirErr?.message}`);
     }
@@ -3049,7 +3014,11 @@ await initializeWorkspace();
     // 2. Update target spec reference
     const specPath = path.join(session.cwd, 'architecture-spec.md');
     try {
-      fs.writeFileSync(specPath, finalSpec, 'utf8');
+      const base64Spec = Buffer.from(finalSpec, 'utf8').toString('base64');
+      const writeResult = await getExecCommand()(`echo '${base64Spec}' | base64 -d > '${specPath}'`);
+      if (writeResult.exitCode !== 0) {
+        throw new Error(`Command exited with code ${writeResult.exitCode}: ${writeResult.stderr}`);
+      }
       writeLog(`[SpecPatch] Successfully updated architecture-spec.md with patched spec.`);
       (session as any).pendingPatchedSpec = finalSpec;
     } catch (err: any) {
@@ -3156,12 +3125,6 @@ await initializeWorkspace();
     }
 
     try {
-      const gitValidation = validateGitWorktree(runCwd);
-      if (!gitValidation.valid) {
-        writeLog(`[Checkpoint] Refusing restore: Workspace validation failed for ${runCwd} - ${gitValidation.error}`);
-        res.status(403).json({ success: false, error: gitValidation.error });
-        return;
-      }
 
       const commitMessage = `Restore to Checkpoint: ${taskLabel || 'Unknown Task'}`;
       writeLog(`[Checkpoint] Projecting state from ${commitSha} onto ${runCwd} and appending snapshot commit.`);

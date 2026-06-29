@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 import { CapiProxy } from './harness/CapiProxy';
 
 describe('Scenario 4: Human escalation and gate-resume', () => {
@@ -102,7 +102,7 @@ describe('Scenario 4: Human escalation and gate-resume', () => {
       assert.ok(resumedContent.includes('Proceeding based on human feedback.'), 'Should have resumed and used next snapshot entry');
       
     } finally {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
   });
 });

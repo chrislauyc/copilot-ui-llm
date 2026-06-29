@@ -2,10 +2,12 @@ import { app, initLogFile } from './server';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import express from 'express';
+import { initializeWorkspace } from './src/workspace';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 async function start() {
+  await initializeWorkspace();
   // Vite preview or static file serving
   if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
     const vite = await createViteServer({

@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 
 describe('Stream Token Timing and Mutation Guard Tests', () => {
   beforeAll(async () => {
@@ -24,7 +24,7 @@ describe('Stream Token Timing and Mutation Guard Tests', () => {
     
     const tempCwd = path.join(process.cwd(), 'tmp-stream-timing-workspace');
     if (fs.existsSync(tempCwd)) {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
     fs.mkdirSync(tempCwd, { recursive: true });
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
@@ -90,7 +90,7 @@ describe('Stream Token Timing and Mutation Guard Tests', () => {
       console.log('✓ Stream token timing and mutation gate verification verified!');
     } finally {
       if (fs.existsSync(tempCwd)) {
-        cleanupWorkspaceDir(tempCwd);
+        fs.rmSync(tempCwd, { recursive: true, force: true });
       }
     }
   });

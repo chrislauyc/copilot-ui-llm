@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-import { cleanupWorkspaceDir } from '../utils/workspace';
+;
 
 describe('Checkpoint Guard REST API Integration Tests', () => {
   beforeAll(async () => {
@@ -24,7 +24,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
     
     const tempCwd = path.join(process.cwd(), 'tmp-checkpoint-workspace');
     if (fs.existsSync(tempCwd)) {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
     fs.mkdirSync(tempCwd, { recursive: true });
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
@@ -106,7 +106,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
     } finally {
       // Clean up temporary workspace
       if (fs.existsSync(tempCwd)) {
-        cleanupWorkspaceDir(tempCwd);
+        fs.rmSync(tempCwd, { recursive: true, force: true });
       }
     }
   });
@@ -121,7 +121,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
     
     const tempCwd = path.join(process.cwd(), 'tmp-checkpoint-workspace-explicit');
     if (fs.existsSync(tempCwd)) {
-      cleanupWorkspaceDir(tempCwd);
+      fs.rmSync(tempCwd, { recursive: true, force: true });
     }
     fs.mkdirSync(tempCwd, { recursive: true });
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
@@ -203,7 +203,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
     } finally {
       // Clean up temporary workspace
       if (fs.existsSync(tempCwd)) {
-        cleanupWorkspaceDir(tempCwd);
+        fs.rmSync(tempCwd, { recursive: true, force: true });
       }
     }
   });
