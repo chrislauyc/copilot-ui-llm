@@ -229,3 +229,10 @@ strictly to the active subtask definition and its immediate validation gate fail
 - Multi-provider, per-tier selection
   - WHEN configuring a role's model tier, THE SYSTEM SHALL allow the provider (copilot-native, Anthropic, Gemini, or local)
     to be selected independently per tier, rather than enforced globally across all tiers.
+
+### 7.7 Workspace Command Execution Centralization
+
+- **SYS-REQ-020 (Ubiquitous):** All workspace mutation, Git operations, and terminal command execution **shall** flow exclusively through the three core workspace functions exported from `src/workspace/index.ts`: `initializeWorkspace()`, `getGitSandbox()`, and `getExecCommand()`.
+  
+- **SYS-REQ-020a (Unwanted Behavior):** **If** any module directly imports and uses `child_process` methods (`exec`, `execSync`, `spawn`) instead of routing through the centralized workspace API, **then** the system **shall** fail code review as a violation of architectural boundary separation.
+  - _Rationale:_ Centralized routing ensures unified timeout policies (GIT_TIMEOUT_MS, EXEC_TIMEOUT_MS), host-container environment abstraction, concurrency control via `GitSandbox.withLock()`, and coherent audit trails across all autonomous execution.
