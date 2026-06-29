@@ -1,10 +1,7 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import { normalizeGateName } from '../config/gates';
-
-const execAsync = promisify(exec);
+import { getExecCommand } from '../workspace';
 
 export interface GateResult {
   gateName: 'runTests' | 'runLint';
@@ -85,34 +82,28 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
     });
   }
 
-  return new Promise((resolve, reject) => {
-    let killed = false;
-    let timer: NodeJS.Timeout;
+  const execCommand = getExecCommand();
+  const signal = AbortSignal.timeout(timeoutMs);
 
-    const child = exec(cmd, cwd ? { cwd } : {}, (error, stdout, stderr) => {
-      clearTimeout(timer);
-      if (killed) return;
-      if (error) {
-        // Embed stdout/stderr in error object for callers expecting them
-        (error as any).stdout = stdout;
-        (error as any).stderr = stderr;
-        reject(error);
-      } else {
-        resolve({
-          stdout: stdout.toString(),
-          stderr: stderr.toString()
-        });
-      }
-    });
-
-    timer = setTimeout(() => {
-      killed = true;
-      try {
-        child.kill('SIGKILL');
-      } catch (e) {}
-      reject(new Error(`Gate execution timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+  const result = await execCommand(
+    cwd ? `cd '${cwd}' && ${cmd}` : cmd,
+    signal
+  ).catch((err: any) => {
+    if (signal.aborted) {
+      throw new Error(`Gate execution timed out after ${timeoutMs}ms`);
+    }
+    throw err;
   });
+
+  if (result.exitCode !== 0) {
+    const error: any = new Error(`Command failed: ${cmd}\n${result.stderr}`);
+    error.stdout = result.stdout;
+    error.stderr = result.stderr;
+    error.code = result.exitCode;
+    throw error;
+  }
+
+  return { stdout: result.stdout, stderr: result.stderr };
 }
 
 export async function runTests(cwd: string = process.cwd()): Promise<GateResult> {

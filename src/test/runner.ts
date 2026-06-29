@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { getExecCommand } from '../workspace';
 
 interface TestResult {
   file: string;
@@ -24,32 +24,18 @@ const TEST_FILES = [
 ];
 
 async function runTestFile(file: string): Promise<TestResult> {
+  const execCommand = getExecCommand();
   const start = Date.now();
-  return new Promise((resolve) => {
-    // Spawns tsx as a separate subprocess to execute the test file
-    const child = spawn('npx', ['tsx', file], {
-      env: { ...process.env, FORCE_COLOR: '1' }
-    });
 
-    let output = '';
-    child.stdout?.on('data', (data) => {
-      output += data.toString();
-    });
-    child.stderr?.on('data', (data) => {
-      output += data.toString();
-    });
+  const result = await execCommand(`npx tsx ${file}`, AbortSignal.timeout(60_000));
 
-    child.on('close', (code) => {
-      const durationMs = Date.now() - start;
-      resolve({
-        file,
-        success: code === 0,
-        exitCode: code,
-        durationMs,
-        output
-      });
-    });
-  });
+  return {
+    file,
+    success: result.exitCode === 0,
+    exitCode: result.exitCode,
+    durationMs: Date.now() - start,
+    output: result.stdout + result.stderr,
+  };
 }
 
 async function main() {
@@ -69,7 +55,6 @@ async function main() {
       console.log(`\x1b[32m✔ PASSED\x1b[0m ${file} (${res.durationMs}ms)`);
     } else {
       console.log(`\x1b[31m✘ FAILED\x1b[0m ${file} (${res.durationMs}ms) with exit code ${res.exitCode}`);
-      // Log the output of failed tests to help diagnose issues
       console.log('\n--- Test Failure Log Output Start ---');
       console.log(res.output);
       console.log('--- Test Failure Log Output End ---\n');

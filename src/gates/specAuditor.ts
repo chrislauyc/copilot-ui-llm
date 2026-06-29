@@ -1,5 +1,3 @@
-import { promisify } from 'util';
-import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
@@ -7,8 +5,6 @@ import { submitSpecAuditTool } from '../config/tools';
 import { getGitSandbox } from '../workspace';
 
 import { getWorkspaceRoot } from '../utils/sandbox';
-
-const execAsync = promisify(exec);
 
 export async function runSpecAudit(cwd: string): Promise<{ pass: boolean; feedback: string }> {
   const targetCwd = getWorkspaceRoot() !== process.cwd() ? getWorkspaceRoot() : cwd;

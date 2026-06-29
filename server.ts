@@ -25,7 +25,7 @@ import { runSpecAudit } from './src/gates/specAuditor';
 import { sanitizeSensitives } from './src/utils/sanitizers';
 import { truncateOutput } from './src/utils/formatters';
 import { getIsolatedName, getWorkspaceHash, activeContainers, syncWorkspace, validateGitWorktree, cleanupWorkspaceDir } from './src/utils/workspace';
-import { initializeWorkspace, getGitSandbox } from './src/workspace';
+import { initializeWorkspace, getGitSandbox, getExecCommand } from './src/workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from './src/utils/contextManager';
 import { fetchStubbedTraceResponse } from './src/utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from './src/utils/escalationStore';
@@ -39,6 +39,8 @@ function cleanupOrphans() {
   for (const name of activeContainers) {
     try {
       if (process.env.NODE_ENV !== 'test') {
+        // Intentional host-side exec: container lifecycle management must run
+        // on the Docker host, not inside a workspace container.
         execSync(`docker rm -f ${name} > /dev/null 2>&1 || true`);
       }
       console.log(`[GC] Force-killed orphan container: ${name}`);
@@ -50,6 +52,8 @@ function cleanupOrphans() {
   try {
     const baseName = getIsolatedName('copilot-runner');
     if (process.env.NODE_ENV !== 'test') {
+      // Intentional host-side exec: container lifecycle management must run
+      // on the Docker host, not inside a workspace container.
       execSync(`docker rm -f ${baseName} > /dev/null 2>&1 || true`);
     }
     const workspaceHash = getWorkspaceHash();
@@ -880,7 +884,7 @@ await initializeWorkspace();
   // Simple session registry for the dev terminal
   const terminalSessions: Record<string, string> = {};
 
-  app.post("/api/exec", (req, res) => {
+  app.post("/api/exec", async (req, res) => {
     const { command, sessionId = "default" } = req.body;
 
     if (!command) {
@@ -899,23 +903,27 @@ await initializeWorkspace();
       return;
     }
 
-    exec(command, { cwd: currentCwd }, (error, stdout, stderr) => {
-      const updateCwdCmd = `${command} && pwd`;
-      exec(updateCwdCmd, { cwd: currentCwd }, (err, out) => {
-          if (!err) {
-              const newCwd = out.trim().split('\n').pop();
-              if (newCwd && fs.existsSync(newCwd)) {
-                  terminalSessions[sessionId] = newCwd;
-              }
-          }
-          
-          res.json({
-            stdout: stdout,
-            stderr: stderr,
-            currentCwd: terminalSessions[sessionId] || currentCwd
-          });
+    try {
+      const execCommand = getExecCommand();
+      const { stdout, stderr } = await execCommand(
+        `cd '${currentCwd}' && ${command} && echo "__CWD__$(pwd)"`
+      );
+
+      // Parse trailing __CWD__ marker to track directory changes (e.g. `cd`)
+      const cwdMatch = stdout.match(/__CWD__(.+)$/m);
+      const cleanStdout = stdout.replace(/__CWD__.+$/m, '').trimEnd();
+      if (cwdMatch?.[1]) {
+        terminalSessions[sessionId] = cwdMatch[1].trim();
+      }
+
+      res.json({
+        stdout: cleanStdout,
+        stderr,
+        currentCwd: terminalSessions[sessionId] || currentCwd,
       });
-    });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // API logs route
@@ -1178,10 +1186,6 @@ await initializeWorkspace();
     const start = Date.now();
     writeLog(`[DIAGNOSTICS] Starting CLI Gate Script check...`);
     try {
-      const { exec } = await import('child_process');
-      const util = await import('util');
-      const execAsync = util.promisify(exec);
-      
       if (process.env.NODE_ENV === 'test') {
         res.json({
           success: true,
@@ -1192,7 +1196,15 @@ await initializeWorkspace();
         return;
       }
 
-      const { stdout, stderr } = await execAsync('npx tsx scripts/diagnose-gates.ts', { cwd: process.cwd() });
+      const execCommand = getExecCommand();
+      const result = await execCommand('npx tsx scripts/diagnose-gates.ts');
+      if (result.exitCode !== 0) {
+        const err: any = new Error(`Command failed with exit code ${result.exitCode}`);
+        err.stdout = result.stdout;
+        err.stderr = result.stderr;
+        throw err;
+      }
+      const { stdout, stderr } = result;
       writeLog(`[DIAGNOSTICS] CLI Gate Script check completed successfully in ${Date.now() - start}ms.`);
       if (stdout) writeLog(`[CLI STDOUT] ${stdout.trim()}`);
       if (stderr) writeLog(`[CLI STDERR] ${stderr.trim()}`);
@@ -1683,6 +1695,7 @@ await initializeWorkspace();
       // SYS-REQ-014: Ensure absolute container demolition regardless of bypass flags
       // This enforces container pruning for all closed sessions
       if (process.env.NODE_ENV !== 'test') {
+        // Intentional host-side exec: docker container lifecycle must run on the host.
         exec(`docker rm -f ${containerName}`, (err) => {
           if (!err) {
             writeLog(`[GC] Cleaned up/pruned sandbox container ${containerName} successfully.`);
@@ -2804,8 +2817,6 @@ await initializeWorkspace();
           writeLog(`[GateLoop] All gates passed successfully!`);
 
           const util = await import('util');
-          const { exec } = await import('child_process');
-          const execAsync = util.promisify(exec);
           let commitSha = '';
           const taskLabel = promptStr.length > 50 ? promptStr.slice(0, 47) + '...' : promptStr;
           
@@ -3025,6 +3036,7 @@ await initializeWorkspace();
     
     // Ensure the runner programmatically issues a teardown signal to prune the specific sandbox container
     if (process.env.NODE_ENV !== 'test') {
+      // Intentional host-side exec: docker container lifecycle must run on the host.
       exec(`docker rm -f ${containerName}`, (err) => {
         if (!err) {
           writeLog(`[CleanupGuard] Cleaned up/pruned sandbox container ${containerName} successfully.`);
@@ -3140,6 +3152,7 @@ await initializeWorkspace();
     // Forcefully execute docker kill against the container
     const containerName = getIsolatedName('copilot-runner', sessionId);
     if (process.env.NODE_ENV !== 'test') {
+      // Intentional host-side exec: docker container lifecycle must run on the host.
       exec(`docker kill ${containerName}`, (err) => {
         if (err) {
           writeLog(`[Panic] Error killing container ${containerName}: ${err.message}`);

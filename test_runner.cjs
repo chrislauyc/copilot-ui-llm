@@ -1,5 +1,14 @@
+// test_runner.cjs — CJS bootstrap for running vitest from a host shell.
+//
+// NOTE: This file intentionally uses spawn() from child_process directly.
+// It is a host-side process launcher (vitest must be invoked as a child
+// process of Node, not routed through the workspace execCommand). It has
+// no access to the ESM workspace module and does not run inside a container.
+// All workspace commands run by vitest itself go through getExecCommand().
+
 const { spawn } = require('child_process');
-const fs = require('fs');
+
+const TIMEOUT_MS = 45_000;
 
 const child = spawn('npx', ['vitest', 'run', 'src/test/spec_gate_audit.test.ts'], {
   stdio: 'pipe',
@@ -36,4 +45,4 @@ setTimeout(() => {
     console.log('[OUTPUT_END] TIMEOUT');
     process.exit(0);
   }
-}, 45000);
+}, TIMEOUT_MS);
