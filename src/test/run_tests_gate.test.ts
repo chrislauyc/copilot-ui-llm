@@ -2,16 +2,12 @@ import { describe, it } from 'vitest';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { runTests, runWithTimeout } from '../gates';
-;
 
 describe('runTests Gate Unit Tests', () => {
   it('runTests returns success true for a workspace with a passing test script', async () => {
-    const tempDir = path.resolve(process.cwd(), 'tmp-test-passing-workspace');
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempDir, { recursive: true });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-passing-'));
 
     // Write a package.json with a passing test script
     const pkgJson = {
@@ -34,11 +30,7 @@ describe('runTests Gate Unit Tests', () => {
   });
 
   it('runTests returns success false for a workspace with a failing test script', async () => {
-    const tempDir = path.resolve(process.cwd(), 'tmp-test-failing-workspace');
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempDir, { recursive: true });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-failing-'));
 
     // Write a package.json with a failing test script
     const pkgJson = {
