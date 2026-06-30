@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-;
+import * as os from 'os';
 
 describe('Spec Patch REST API Integration Tests', () => {
   beforeAll(async () => {
@@ -22,11 +22,7 @@ describe('Spec Patch REST API Integration Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_patch.yaml');
     
-    const tempCwd = path.join(process.cwd(), 'tmp-spec-patch-workspace');
-    if (fs.existsSync(tempCwd)) {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempCwd, { recursive: true });
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-patch-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
     
     // Initial empty architecture-spec.md
@@ -123,11 +119,7 @@ describe('Spec Patch REST API Integration Tests', () => {
 
   it('Verifies that pendingPatchedSpec is injected into the next prompt layout during gate loop re-invocation', async () => {
     const { serverPort } = serverHarness;
-    const tempCwd = path.join(process.cwd(), 'tmp-spec-patch-workspace-reprompt');
-    if (fs.existsSync(tempCwd)) {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempCwd, { recursive: true });
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-patch-reprompt-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
     fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
       name: 'mock-spec-patch-workspace-reprompt',
