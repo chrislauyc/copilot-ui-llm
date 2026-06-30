@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-;
+import * as os from 'os';
 
 describe('Human Escalation Missing Input Tests', () => {
   beforeAll(async () => {
@@ -18,11 +18,7 @@ describe('Human Escalation Missing Input Tests', () => {
     const { serverPort, proxy } = serverHarness;
     assert.ok(proxy);
 
-    const tempCwd = path.join(process.cwd(), 'tmp-human-escalation-missing-input');
-    if (fs.existsSync(tempCwd)) {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempCwd, { recursive: true });
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'human-escalation-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
     
     // Setup escalation: force fail runLint
