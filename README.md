@@ -232,6 +232,25 @@ strictly to the active subtask definition and its immediate validation gate fail
 - **SYS-REQ-020a (Unwanted Behavior):** **If** any module directly imports and uses `child_process` methods (`exec`, `execSync`, `spawn`) instead of routing through the centralized workspace API, **then** the system **shall** fail code review as a violation of architectural boundary separation.
   - _Rationale:_ Centralized routing ensures unified timeout policies (GIT_TIMEOUT_MS, EXEC_TIMEOUT_MS), host-container environment abstraction, concurrency control via `GitSandbox.withLock()`, and coherent audit trails across all autonomous execution.
 
+
+### Testing workspace policy — NO REPO MUTATION (MANDATORY)
+
+Tests MUST NOT create, persist, or mutate files or directories inside the repository working tree. To make the intent explicit and auditable:
+
+- Tests are allowed to create ephemeral workspaces only under the operating system temporary directory (e.g., os.tmpdir()). Never create test fixtures directly under the repository root (no tmp-*, .tmp/, test-fixtures/ in repo).
+- Always create ephemeral workspaces with unique names (fs.mkdtempSync or equivalent) and clean them up in a finally block or test teardown hook.
+  - do not conflate the workspace the app is managing with the workspace containing the app's code.
+
+
+
+  - If a test needs to exercise Git operations or workspace behaviors, prefer one of:
+  - invoking the centralized workspace APIs in src/workspace,
+  - mock the API in src/workspace so the tests don't make any real git operations or command executions.
+  
+
+Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git management) and prevents accidental destructive test behavior that could mutate or delete repository data. Adopting a test helper and a defensive check protects developers and CI runners from catastrophic mistakes.
+
+
 ## Policy exceptions
 
 - dev-terminal/ is an explicit development-only exception to SYS-REQ-020. It intentionally runs host processes for local development and debugging while the project runs in AI Studio mode. dev-terminal/ must be excluded from security audits and code-scanning workflows and removed before production or when AI Studio is no longer used. Any other use of `child_process` outside `src/workspace/` requires an explicit, documented exception and code-review approval.
