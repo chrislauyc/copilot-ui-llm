@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import { CopilotClient } from '@github/copilot-sdk';
 import { CapiProxy } from './harness/CapiProxy';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 
 describe('Copilot SDK Client Integration Tests', () => {
   it('Runs integration test with mock CapiProxy playback', { timeout: 60000 }, async () => {
@@ -12,6 +14,11 @@ describe('Copilot SDK Client Integration Tests', () => {
     const proxy = new CapiProxy();
     const proxyUrl = await proxy.start();
     console.log(`CapiProxy listening at ${proxyUrl}`);
+
+    // This test's tool handlers are fully mocked (no real command execution),
+    // but workingDirectory is still kept isolated from the app's own source
+    // tree as a defensive precaution rather than pointed at process.cwd().
+    const tempWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-integration-'));
 
     try {
       // 2. Set proxy dummy configurations
@@ -28,13 +35,13 @@ describe('Copilot SDK Client Integration Tests', () => {
       const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/single_retry.yaml');
       await proxy.updateConfig({
         filePath: snapshotPath,
-        workDir: process.cwd(),
+        workDir: tempWorkDir,
       });
       console.log(`Loaded snapshot from ${snapshotPath}`);
 
       // 3. Construct CopilotClient pointing to the proxy
       const client = new CopilotClient({
-        workingDirectory: process.cwd(),
+        workingDirectory: tempWorkDir,
         logLevel: 'none',
         useLoggedInUser: false,
         env: {
@@ -88,6 +95,7 @@ describe('Copilot SDK Client Integration Tests', () => {
       }
     } finally {
       await proxy.stop();
+      fs.rmSync(tempWorkDir, { recursive: true, force: true });
     }
   });
 });
