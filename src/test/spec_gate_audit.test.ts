@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-;
+import * as os from 'os';
 import { initializeWorkspace, getGitSandbox } from '../workspace';
 
 describe('Spec-Gate Auditor Validation Tests', () => {
@@ -23,11 +23,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_gate_audit_failure.yaml');
     
-    const tempCwd = path.join(process.cwd(), 'tmp-spec-workspace');
-    if (fs.existsSync(tempCwd)) {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempCwd, { recursive: true });
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-gate-'));
 
     // Initialize git and commit a baseline to simulate active changes
     console.log('Initializing local mock git structure inside test workspace...');
