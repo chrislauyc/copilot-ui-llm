@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-;
+import * as os from 'os';
 
 describe('Multi-Turn Gate Failure Persistence Tests', () => {
   beforeAll(async () => {
@@ -22,12 +22,8 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/multi_turn_gate_failure.yaml');
     
-    // Set up a mock workspaces directory
-    const tempCwd = path.join(process.cwd(), 'tmp-multi-turn-workspace');
-    if (fs.existsSync(tempCwd)) {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempCwd, { recursive: true });
+    // Set up a mock workspaces directory under the OS temp root
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-turn-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
     
     // Write package.json with a custom lint command that triggers our turn-aware script
