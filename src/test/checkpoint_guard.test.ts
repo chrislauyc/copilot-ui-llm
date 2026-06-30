@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
-;
+import * as os from 'os';
 
 describe('Checkpoint Guard REST API Integration Tests', () => {
   beforeAll(async () => {
@@ -22,11 +22,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/panic_stop.yaml');
     
-    const tempCwd = path.join(process.cwd(), 'tmp-checkpoint-workspace');
-    if (fs.existsSync(tempCwd)) {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempCwd, { recursive: true });
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'checkpoint-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
     
     fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
@@ -119,11 +115,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/panic_stop.yaml');
     
-    const tempCwd = path.join(process.cwd(), 'tmp-checkpoint-workspace-explicit');
-    if (fs.existsSync(tempCwd)) {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
-    }
-    fs.mkdirSync(tempCwd, { recursive: true });
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'checkpoint-explicit-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
     
     fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
