@@ -17,13 +17,13 @@ import { SessionRecord, StateSnapshot, CopilotEventData, Turn } from './src/type
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './src/utils/prompt';
 import { makeDockerToolHandler } from './src/utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './src/config/tools';
-import { getWorkspaceRoot, getDefaultWorkspaceDir, getWorkspaceHash, getIsolatedName } from './src/utils/sandbox';
+import { getWorkspaceRoot, getWorkspaceHash, getIsolatedName } from './src/utils/sandbox';
 
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from './src/config/gates';
 import { runSpecAudit } from './src/gates/specAuditor';
 import { sanitizeSensitives } from './src/utils/sanitizers';
 import { truncateOutput } from './src/utils/formatters';
-import { initializeWorkspace, getGitSandbox, getExecCommand } from './src/workspace';
+import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceHostLocation } from './src/workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from './src/utils/contextManager';
 import { fetchStubbedTraceResponse } from './src/utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from './src/utils/escalationStore';
@@ -78,7 +78,7 @@ if (!process.env.COPILOT_CLI_PATH) {
 const LOG_FILE = path.join('/tmp', 'debug_log.txt');
 export const lastRunLog: string[] = [];
 
-const DEFAULT_WORKSPACE_DIR = getDefaultWorkspaceDir();
+const DEFAULT_WORKSPACE_DIR = getWorkspaceHostLocation();
 if (!fs.existsSync(DEFAULT_WORKSPACE_DIR)) {
   fs.mkdirSync(DEFAULT_WORKSPACE_DIR, { recursive: true });
 }

@@ -1,6 +1,6 @@
 export {
   getExecCommand,
   getGitSandbox,
+  getWorkspaceHostLocation,
   initializeWorkspace,
-  getWorkspaceRoot,
 } from "./workspace";
