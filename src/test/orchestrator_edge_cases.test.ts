@@ -3,8 +3,15 @@ import assert from 'node:assert';
 import * as http from 'node:http';
 import { AddressInfo } from 'node:net';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 import { app, activeSessions } from '../../server';
 import { CapiProxy } from './harness/CapiProxy';
+
+// Mock CapiProxy config only ever reads `workDir` for bookkeeping in these
+// tests; it is kept pointed at an isolated OS-tmpdir location rather than
+// process.cwd() so nothing here is wired toward the app's own source tree.
+const mockProxyWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestrator-edge-'));
 
 // Helper to handle test deadlocks
 async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, contextDescription: string): Promise<T> {
@@ -56,6 +63,7 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     // Clean up all localized servers and listeners synchronously
     if (proxy) await proxy.stop();
     if (server) await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+    fs.rmSync(mockProxyWorkDir, { recursive: true, force: true });
   }, 30000);
 
   it('Test 1: Singleton Concurrency Race (Gap 1)', async () => {
@@ -131,7 +139,7 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
 
   it('Test 4: Replay Mismatch Prevention (Gap 4)', async () => {
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_gate_audit_failure.yaml');
-    await proxy.updateConfig({ filePath: snapshotPath, workDir: process.cwd() });
+    await proxy.updateConfig({ filePath: snapshotPath, workDir: mockProxyWorkDir });
 
     const response = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/gate-run`, {
       method: 'POST',
@@ -159,7 +167,7 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
   it('Test 5: Loop Retry Disconnect Validation (Gap 5)', async () => {
     // 1. Point the proxy configuration to a snapshot built to trip a gate rule
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_gate_audit_failure.yaml');
-    await proxy.updateConfig({ filePath: snapshotPath, workDir: process.cwd() });
+    await proxy.updateConfig({ filePath: snapshotPath, workDir: mockProxyWorkDir });
     
     proxy.tokenFetchCount = 0;
     proxy.requestHistory = [];
