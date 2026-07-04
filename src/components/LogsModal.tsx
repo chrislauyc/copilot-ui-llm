@@ -2,9 +2,9 @@ import React from 'react';
 import { X, Copy, Terminal } from 'lucide-react';
 
 interface LogsModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  logs: string;
+  readonly isOpen: boolean;
+  readonly onClose: () => void;
+  readonly logs: string;
 }
 
 export default function LogsModal({ isOpen, onClose, logs }: LogsModalProps) {

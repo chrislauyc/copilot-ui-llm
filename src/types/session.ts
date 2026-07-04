@@ -1,8 +1,5 @@
 import { ModelTier } from '../config/models';
-
-export interface CopilotSession {
-  readonly disconnect: () => Promise<void>;
-}
+import { CopilotSession } from '../copilotSdk/boundary';
 
 export interface TaskDecomposition {
   readonly version: number;
@@ -28,11 +25,31 @@ export interface StateSnapshot {
   readonly currentModelIndex?: number;
 }
 
+export interface CopilotEventPayload {
+  readonly sequenceId?: number;
+  readonly stateSnapshot?: StateSnapshot;
+  readonly [key: string]: unknown;
+}
+
 export interface CopilotEventData {
   readonly id: string;
   readonly timestamp: string;
   readonly type: string;
-  readonly data?: unknown;
+  readonly sequenceId?: number;
+  readonly data?: CopilotEventPayload;
+}
+
+export function getSequenceId(ev: CopilotEventData): number {
+  if (typeof ev.sequenceId === 'number') {
+    return ev.sequenceId;
+  }
+  if (ev.data && typeof ev.data === 'object') {
+    const data = ev.data as CopilotEventPayload;
+    if (typeof data.sequenceId === 'number') {
+      return data.sequenceId;
+    }
+  }
+  return 0;
 }
 
 export interface Turn {
@@ -61,4 +78,6 @@ export interface SessionRecord {
   readonly turns: ReadonlyArray<Turn>;
   readonly diagnosticTrail?: ReadonlyArray<unknown>;
   readonly unsubscribe?: () => void;
+  readonly pendingPatchedSpec?: string;
+  readonly lastPassedSpecAuditSha?: string;
 }

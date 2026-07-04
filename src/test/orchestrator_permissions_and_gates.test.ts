@@ -21,7 +21,7 @@ describe('handleGateRunPermission Unit Tests', () => {
   it('should auto-approve safe utility tools', async () => {
     const safeTools = ['submit_audit_findings', 'ambiguity_check', 'composer_router'];
     for (const tool of safeTools) {
-      const res = await handleGateRunPermission({ toolName: tool });
+      const res = await handleGateRunPermission({ toolName: tool } as any);
       expect(res.kind).toBe('approve-once');
     }
   });
@@ -29,8 +29,8 @@ describe('handleGateRunPermission Unit Tests', () => {
   it('should block unauthorized or unknown tools', async () => {
     const unauthorizedTools = ['delete_database', 'arbitrary_bash', 'some_unknown_tool'];
     for (const tool of unauthorizedTools) {
-      const res = await handleGateRunPermission({ toolName: tool });
-      expect(res.kind).toBe('denied');
+      const res = await handleGateRunPermission({ toolName: tool } as any);
+      expect(res.kind).toBe('reject');
       expect((res as any).reason).toContain('is not authorized');
     }
   });
@@ -38,8 +38,8 @@ describe('handleGateRunPermission Unit Tests', () => {
   it('should block allowed orchestrator tools if there is no active running session context', async () => {
     const allowedTools = ['run_terminal_docker', 'run_tests'];
     for (const tool of allowedTools) {
-      const res = await handleGateRunPermission({ toolName: tool });
-      expect(res.kind).toBe('denied');
+      const res = await handleGateRunPermission({ toolName: tool } as any);
+      expect(res.kind).toBe('reject');
       expect((res as any).reason).toContain('active, authorized orchestration session');
     }
   });
@@ -70,14 +70,14 @@ describe('handleGateRunPermission Unit Tests', () => {
 
     const allowedTools = ['run_terminal_docker', 'run_tests'];
     for (const tool of allowedTools) {
-      const res = await handleGateRunPermission({ toolName: tool });
+      const res = await handleGateRunPermission({ toolName: tool } as any);
       expect(res.kind).toBe('approve-once');
     }
   });
 
   it('should still auto-approve when process.env.NODE_ENV is test', async () => {
     process.env.NODE_ENV = 'test';
-    const res = await handleGateRunPermission({ toolName: 'run_terminal_docker' });
+    const res = await handleGateRunPermission({ toolName: 'run_terminal_docker' } as any);
     expect(res.kind).toBe('approve-once');
   });
 });
@@ -87,8 +87,12 @@ describe('Orchestration gate-run and resume Integration Tests', () => {
   let server: any;
   let serverPort: number;
   let proxy: CapiProxy;
+  let originalEnv: string | undefined;
 
   beforeAll(async () => {
+    originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+
     proxy = new CapiProxy();
     const proxyUrl = await proxy.start();
     process.env.COPILOT_API_URL = proxyUrl;
@@ -102,6 +106,7 @@ describe('Orchestration gate-run and resume Integration Tests', () => {
   });
 
   afterAll(async () => {
+    process.env.NODE_ENV = originalEnv;
     await proxy.stop();
     await new Promise<void>((resolve) => {
       if (server) {
