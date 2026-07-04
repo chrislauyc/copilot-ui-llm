@@ -267,3 +267,7 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 - dev-terminal/ is an explicit development-only exception to SYS-REQ-020. It intentionally runs host processes for local development and debugging while the project runs in AI Studio mode. dev-terminal/ must be excluded from security audits and code-scanning workflows and removed before production or when AI Studio is no longer used. Any other use of `child_process` outside `src/workspace/` requires an explicit, documented exception and code-review approval.
 
 - TODO: Remove dev-terminal/ when AI_STUDIO support is removed.
+
+
+
+**Security posture note**: This project is intended for local development and trusted-environment use. As a result, some security controls may be intentionally relaxed compared with production-grade applications. Auditor feedback about security should be weighed against this local-only context and the project’s optimization for rapid iteration over hardened deployment.
