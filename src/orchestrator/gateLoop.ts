@@ -80,6 +80,7 @@ import {
   resetSessionForNewRun,
   updateStateSnapshot,
   writeLog,
+  LogLevel,
   sensitiveValuesCache,
   DIAGNOSTIC_SCENARIOS,
   DEFAULT_WORKSPACE_DIR,
@@ -144,13 +145,13 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
   // Safe read-only/audit tools
   const safeTools = ['submit_audit_findings', 'ambiguity_check', 'composer_router'];
   if (safeTools.includes(toolName)) {
-    writeLog(`[Security] Auto-approved safe utility tool: ${toolName}`);
+    writeLog(`[Security] Auto-approved safe utility tool: ${toolName}`, LogLevel.DEBUG);
     return { kind: 'approve-once' };
   }
 
   // If in test environment, allow command execution in sandbox
   if (process.env.NODE_ENV === 'test') {
-    writeLog(`[Security] Approved command execution in test environment: ${toolName}`);
+    writeLog(`[Security] Approved command execution in test environment: ${toolName}`, LogLevel.DEBUG);
     return { kind: 'approve-once' };
   }
 
@@ -162,10 +163,10 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
       s => s.stateSnapshot?.isRunning && !s.stateSnapshot?.awaitingHuman
     );
     if (hasActiveSession) {
-      writeLog(`[Security] Approved active session tool execution: ${toolName}`);
+      writeLog(`[Security] Approved active session tool execution: ${toolName}`, LogLevel.DEBUG);
       return { kind: 'approve-once' };
     } else {
-      writeLog(`[Security Check Failed] Denied tool execution outside of an active running session context: ${toolName}`);
+      writeLog(`[Security Check Failed] Denied tool execution outside of an active running session context: ${toolName}`, LogLevel.WARN);
       return {
         kind: 'reject',
         feedback: `Execution of ${toolName} requires an active, authorized orchestration session context.`,
@@ -175,7 +176,7 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
   }
 
   // Default block for other tools
-  writeLog(`[Security Check Failed] Blocked unknown or unauthorized tool: ${toolName}`);
+  writeLog(`[Security Check Failed] Blocked unknown or unauthorized tool: ${toolName}`, LogLevel.WARN);
   return {
     kind: 'reject',
     feedback: `Tool ${toolName} is not authorized`,
@@ -282,17 +283,12 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
   };
 
   req.on('close', () => {
-    writeLog(`[SDK] req.on(close) fired. res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed} req.destroyed=${req.destroyed}`);
+    writeLog(`[SDK] Connection closed. res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed} req.destroyed=${req.destroyed}`);
     // Only clean up if the socket or response is actually destroyed before cleanly finishing
-    if (!res.writableEnded && res.destroyed) {
-       writeLog('[SDK] Client aborted gate-run connection gracefully.');
+    if (!res.writableEnded) {
+       writeLog('[SDK] Client connection ended or aborted.');
        cleanup();
     }
-  });
-  
-  req.on('aborted', () => {
-    writeLog('[SDK] Client aborted gate-run connection prematurely.');
-    cleanup();
   });
 
   try {
@@ -325,7 +321,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     const scenario = isDiagnostic && diagnosticScenario ? DIAGNOSTIC_SCENARIOS[diagnosticScenario as string] : null;
 
     if ((diagnosticScenario || replayTraceId) && !isDiagnostic) {
-      writeLog('[Security] Diagnostic mode is disabled. Rejecting diagnostic request.');
+      writeLog('[Security] Diagnostic mode is disabled. Rejecting diagnostic request.', LogLevel.WARN);
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: 'Diagnostic mode is disabled via environment configuration.' }));
       await cleanup();
@@ -413,7 +409,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       runCwd = validateCwd(cwd);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      writeLog(`[Security Blocked] ${msg}`);
+      writeLog(`[Security Blocked] ${msg}`, LogLevel.WARN);
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Access denied: Invalid directory path or directory traversal.');
       await cleanup();
@@ -594,7 +590,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         } finally {
           abortController.signal.removeEventListener('abort', clarityAbortHandler);
         }
-        writeLog(`[Ambiguity] sendAndWait finished. clarityData is: ${JSON.stringify(clarityData)}`);
+        writeLog(`[Ambiguity] sendAndWait finished. clarityData is: ${JSON.stringify(clarityData)}`, LogLevel.DEBUG);
         unsub();
         await claritySession.disconnect();
         
@@ -615,7 +611,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           return;
         }
       } catch (err) {
-        writeLog(`[Ambiguity] Check failed, bypassing: ${err}`);
+        writeLog(`[Ambiguity] Check failed, bypassing: ${err}`, LogLevel.WARN);
         const warnEvent = {
           type: 'loop.warning',
           data: { message: `Ambiguity check failed: ${err instanceof Error ? err.message : String(err)}. Bypassing to execution.` }
@@ -712,7 +708,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         }
         await classificationSession.disconnect();
       } catch (err) {
-        writeLog(`[Composer] Classification failed, falling back: ${err}`);
+        writeLog(`[Composer] Classification failed, falling back: ${err}`, LogLevel.WARN);
         activeStepGates = resolvePipeline('feature');
 
         const warnEvent = {
@@ -756,7 +752,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         const isPremiumTier = currentModelIndex > 0;
         
         if (loopCycleCounter > MAX_RETRY_CYCLES) {
-          writeLog(`[GateLoop] Iteration ceiling reached (${MAX_RETRY_CYCLES}). Bypassing further auto-healing logic and forcing human intervention.`);
+          writeLog(`[GateLoop] Iteration ceiling reached (${MAX_RETRY_CYCLES}). Bypassing further auto-healing logic and forcing human intervention.`, LogLevel.WARN);
           const escalateEvent = {
             type: 'loop.ceiling_breached',
             data: {
@@ -813,7 +809,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           });
           const updatedRec = activeSessions.get(sessionId)!;
           if (updatedRec.totalInputTokens! > MAX_SESSION_TOKEN_BUDGET) {
-            writeLog(`[GateLoop] Token budget exceeded! Budget: ${MAX_SESSION_TOKEN_BUDGET}, Projected: ${updatedRec.totalInputTokens}. Short-circuiting...`);
+            writeLog(`[GateLoop] Token budget exceeded! Budget: ${MAX_SESSION_TOKEN_BUDGET}, Projected: ${updatedRec.totalInputTokens}. Short-circuiting...`, LogLevel.WARN);
             const escalateEvent = {
               type: 'loop.escalate_human',
               data: {
@@ -898,7 +894,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           try {
             await session.disconnect();
           } catch (e) {
-            writeLog(`[GateLoop] Error disconnecting last loop session: ${e}`);
+            writeLog(`[GateLoop] Error disconnecting last loop session: ${e}`, LogLevel.WARN);
           }
           session = null;
         }
@@ -938,7 +934,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           }
         }
 
-        writeLog(`[GateLoop] Starting iteration with model: ${currentModel}, retryCount: ${retryCount}/${maxRetries}`);
+        writeLog(`[GateLoop] Starting iteration with model: ${currentModel}, retryCount: ${retryCount}/${maxRetries}`, LogLevel.DEBUG);
         updateStateSnapshot(sessionId, { isRunning: true, currentTier: currentModel, retryCount, activeGate: undefined, awaitingHuman: false });
 
         // Setup streaming event listener for current session
@@ -1008,6 +1004,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
             const activeSession: CopilotSession = session;
 
+            let eventChain = Promise.resolve();
             const pDone = new Promise<void>((resolve, reject) => {
               const onAbort = () => {
                 if (unsubscribe) { unsubscribe(); unsubscribe = null; }
@@ -1015,68 +1012,70 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               };
               abortController.signal.addEventListener('abort', onAbort);
 
-              unsubscribe = activeSession.on(async (event: SessionEvent) => {
-                const extEvent = event as ExtendedSessionEvent;
-                if (sessionId && activeSessions.has(sessionId)) {
-                  const sRec = activeSessions.get(sessionId)!;
-                  activeSessions.set(sessionId, {
-                    ...sRec,
-                    unsubscribe: unsubscribe || undefined
-                  });
-                }
-                try {
-                  if (res.writableEnded || res.destroyed || isRequestClosed || abortController.signal.aborted) {
-                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                    abortController.signal.removeEventListener('abort', onAbort);
-                    reject(new Error('SSE stream connection terminated or closed'));
-                    return;
-                  }
-
-                  if (extEvent.type === 'tool.user_requested') {
-                    toolWasCalledInThisTurn = true;
-                  }
-
-                  if (extEvent.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
+              unsubscribe = activeSession.on((event: SessionEvent) => {
+                eventChain = eventChain.then(async () => {
+                  const extEvent = event as ExtendedSessionEvent;
+                  if (sessionId && activeSessions.has(sessionId)) {
                     const sRec = activeSessions.get(sessionId)!;
-                    const toolName = extEvent.data.toolName || 'unknown';
-                    const output = extEvent.data.stdout || extEvent.data.stderr || '';
                     activeSessions.set(sessionId, {
-                        ...sRec,
-                        conversationHistory: [
-                            ...(sRec.conversationHistory || []),
-                            { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
-                        ]
+                      ...sRec,
+                      unsubscribe: unsubscribe || undefined
                     });
                   }
+                  try {
+                    if (res.writableEnded || res.destroyed || isRequestClosed || abortController.signal.aborted) {
+                      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                      abortController.signal.removeEventListener('abort', onAbort);
+                      reject(new Error('SSE stream connection terminated or closed'));
+                      return;
+                    }
 
-                  // Aggregate assistant message content
-                  if (extEvent.type === 'assistant.message') {
-                    assistantMessage += extEvent.data.content || '';
-                  } else if (extEvent.type === 'assistant.message_delta') {
-                    assistantMessage += extEvent.data.deltaContent || '';
-                  }
+                    if (extEvent.type === 'tool.user_requested') {
+                      toolWasCalledInThisTurn = true;
+                    }
 
-                  // Step 2: Emit all SDK events to client
-                  await secureWrite(res, `data: ${JSON.stringify(extEvent)}\n\n`, isRequestClosed);
+                    if (extEvent.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
+                      const sRec = activeSessions.get(sessionId)!;
+                      const toolName = extEvent.data.toolName || 'unknown';
+                      const output = extEvent.data.stdout || extEvent.data.stderr || '';
+                      activeSessions.set(sessionId, {
+                          ...sRec,
+                          conversationHistory: [
+                              ...(sRec.conversationHistory || []),
+                              { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
+                          ]
+                      });
+                    }
 
-                  if (extEvent.type === 'session.idle' || extEvent.type === 'session.shutdown') {
-                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                    // Aggregate assistant message content
+                    if (extEvent.type === 'assistant.message') {
+                      assistantMessage += extEvent.data.content || '';
+                    } else if (extEvent.type === 'assistant.message_delta') {
+                      assistantMessage += extEvent.data.deltaContent || '';
+                    }
+
+                    // Step 2: Emit all SDK events to client
+                    await secureWrite(res, `data: ${JSON.stringify(extEvent)}\n\n`, isRequestClosed);
+
+                    if (extEvent.type === 'session.idle' || extEvent.type === 'session.shutdown') {
+                      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                      abortController.signal.removeEventListener('abort', onAbort);
+                      resolve();
+                    } else if (extEvent.type === 'session.error') {
+                      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                      abortController.signal.removeEventListener('abort', onAbort);
+                      reject(new Error(extEvent.data.message));
+                    }
+                  } catch (err: unknown) {
+                    writeLog(`[GateLoop] Error forwarding event: ${err instanceof Error ? err.message : String(err)}`, LogLevel.WARN);
                     abortController.signal.removeEventListener('abort', onAbort);
-                    resolve();
-                  } else if (extEvent.type === 'session.error') {
-                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                    abortController.signal.removeEventListener('abort', onAbort);
-                    reject(new Error(extEvent.data.message));
+                    reject(err);
                   }
-                } catch (err: unknown) {
-                  writeLog(`[GateLoop] Error forwarding event: ${err instanceof Error ? err.message : String(err)}`);
-                  abortController.signal.removeEventListener('abort', onAbort);
-                  reject(err);
-                }
+                });
               });
             });
 
-            writeLog(`[GateLoop] Session started. Sending prompt: "${currentPrompt.substring(0, 60)}..."`);
+            writeLog(`[GateLoop] Session started. Sending prompt: "${currentPrompt.substring(0, 60)}..."`, LogLevel.DEBUG);
             
             // Push user message to history ONLY on first iteration 
             if (loopCycleCounter === 1 && sessionId && activeSessions.has(sessionId)) {
@@ -1087,19 +1086,19 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               });
             }
 
-            writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`);
+            writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`, LogLevel.DEBUG);
             await Promise.race([
               session.sendAndWait({ prompt: currentPrompt }, 600000),
               abortPromise
             ]);
-            writeLog(`[SESSION] sendAndWait finished.`);
+            writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
             // Wait for session.idle / turn completion
             writeLog(`[SESSION] Awaiting pDone resolution`);
             try {
               await Promise.race([pDone, abortPromise]);
               writeLog(`[SESSION] pDone resolved successfully`);
             } catch (pErr: unknown) {
-              writeLog(`[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. Aborting loop.`);
+              writeLog(`[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. Aborting loop.`, LogLevel.WARN);
               break;
             }
 
@@ -1124,7 +1123,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
 
             // SYS-REQ-004: Enforce structured tool calls for mutation tasks
             if (!isDiagnostic && process.env.NODE_ENV !== 'test' && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
-               writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`);
+               writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`, LogLevel.WARN);
                allGatesPassedInThisCycle = false;
                failedGateName = 'MutationGate';
                failedGateFeedback = truncateOutput('The executor failed to emit any structured tool calls to modify files. Plain text explanations are blocked for mutation tasks.');
@@ -1180,7 +1179,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             };
             await secureWrite(res, `data: ${JSON.stringify(startGateEvent)}\n\n`, isRequestClosed);
 
-            writeLog(`[GateLoop] Running gate: ${gateName}`);
+            writeLog(`[GateLoop] Running gate: ${gateName}`, LogLevel.INFO);
             gatesRunCount++;
             
             let gateResult;
@@ -1288,7 +1287,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
 
             // Step 5: Emit a `gate.result` event
-            writeLog(`[LOOP] Gate ${gateName} result: pass=${gateResult.pass} durationMs=${gateResult.durationMs}`);
+            writeLog(`[LOOP] Gate ${gateName} result: pass=${gateResult.pass} durationMs=${gateResult.durationMs}`, gateResult.pass ? LogLevel.INFO : LogLevel.WARN);
             updateStateSnapshot(sessionId, { activeGate: undefined, hasFailureState: !gateResult.pass });
             const gateEvent = {
               type: 'gate.result',
@@ -1316,7 +1315,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               }
 
               if (consecutiveFailures >= 5) {
-                writeLog(`[GateLoop] Persistent bottleneck detected on gate ${failedGateName} (${consecutiveFailures} failures). Injecting auto-heal steps.`);
+                writeLog(`[GateLoop] Persistent bottleneck detected on gate ${failedGateName} (${consecutiveFailures} failures). Injecting auto-heal steps.`, LogLevel.WARN);
                 if (!activeStepGates.includes('runLint')) {
                   activeStepGates.unshift('runLint');
                   writeLog(`[GateLoop] Injected runLint at the start of pipeline to auto-heal syntax structures.`);
@@ -1410,7 +1409,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           lastFailedGate = '';
           updateStateSnapshot(sessionId, { isRunning: false, hasFailureState: false });
           // Step 6: All gates pass → emit `loop.complete`, end
-          writeLog(`[GateLoop] All gates passed successfully!`);
+          writeLog(`[GateLoop] All gates passed successfully!`, LogLevel.INFO);
 
           const util = await import('util');
           let commitSha = '';
