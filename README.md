@@ -89,7 +89,7 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 
 ### 3.2 Host-Isolation & Risk Absorption
 
-- **ORCH-REQ-014 (Ubiquitous):** The execution loop shall rely exclusively on host-worktree isolated Docker sandboxes (derived dynamically from a host-path directory hash) and Git-based version rollback states to mitigate command execution risk and absorb environment errors.
+- **ORCH-REQ-014 (Ubiquitous):** The execution loop shall rely exclusively on a host-worktree isolated Docker sandbox and Git-based version rollback states to mitigate command execution risk and absorb environment errors.
 
 ---
 
