@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { killProcessGroup } from "./processGroup";
 
 // fs.mkdtempSync atomically creates a uniquely-named directory under the
 // OS temp root (respects TMPDIR/TEMP/TMP) and returns its path — avoiding
@@ -33,14 +34,30 @@ export async function runNativeProcess(
     const child = spawn("bash", ["-s"], {
       cwd: getWorkspaceRoot(),
       env: { PATH: FIXED_PATH },
+      detached: true,
     });
 
-    const onAbort = () => child.kill("SIGKILL");
+    const killChild = () => killProcessGroup(child);
+
+    const onAbort = () => killChild();
     if (signal) {
       signal.addEventListener("abort", onAbort);
       if (signal.aborted) {
-        child.kill("SIGKILL");
-        resolve({ stdout: "", stderr: "Native process aborted", exitCode: 1 });
+        killChild();
+        // Wait for the OS to actually reap the process group before
+        // resolving, rather than assuming SIGKILL took effect the instant
+        // it was sent — mirrors the docker runner's wait-for-cleanup
+        // behavior so callers get consistent "resolved means dead" semantics
+        // across both runners. Bounded by the same style of fallback timer
+        // used elsewhere in this file in case close never fires.
+        const timer = setTimeout(() => {
+          child.removeAllListeners("close");
+          resolve({ stdout: "", stderr: "Native process aborted", exitCode: 1 });
+        }, 1000);
+        child.once("close", () => {
+          clearTimeout(timer);
+          resolve({ stdout: "", stderr: "Native process aborted", exitCode: 1 });
+        });
         return;
       }
     }
@@ -74,7 +91,7 @@ export async function runNativeProcess(
       child.stdin.end();
     } else {
       if (signal) signal.removeEventListener("abort", onAbort);
-      child.kill("SIGKILL");
+      killChild();
 
       // Wait for the process to fully exit before resolving. A fallback timer
       // guards against close never firing (e.g. the process ignores SIGKILL).
