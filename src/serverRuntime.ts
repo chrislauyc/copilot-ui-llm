@@ -406,7 +406,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       return;
     }
 
-    const currentCwd = terminalSessions[sessionId] || process.cwd();
+    const currentCwd = terminalSessions[sessionId] || getWorkspaceRoot();
 
     if (process.env.NODE_ENV === 'test') {
       res.json({
@@ -633,7 +633,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
   // T1 — Diagnostics: Gates (echo command through runWithTimeout, runTests, and runLint)
   app.get('/api/diagnostics/gates', async (req, res) => {
     try {
-      const runCwd = process.cwd();
+      const runCwd = getWorkspaceRoot();
       
       const timeoutStart = Date.now();
       let timeoutPass = true;
@@ -1299,6 +1299,20 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         const msg = err instanceof Error ? err.message : String(err);
         writeLog(`[Security Blocked] ${msg}`);
         res.status(403).json({ success: false, error: 'Access denied: Invalid directory path or directory traversal.' });
+        return;
+      }
+    }
+
+    // 1. Refuse restore if there is any active loop execution running in the target workspace
+    const checkCwd = runCwd || (sessionId ? activeSessions.get(sessionId)?.cwd : undefined);
+    if (checkCwd) {
+      const absTargetCwd = path.resolve(checkCwd);
+      const runningSession = Array.from(activeSessions.values()).find(
+        s => path.resolve(s.cwd) === absTargetCwd && s.stateSnapshot?.isRunning
+      );
+      if (runningSession) {
+        writeLog(`[Checkpoint] Refusing restore because an active loop is running in cwd: ${checkCwd}`);
+        res.status(409).json({ success: false, error: 'Cannot restore checkpoint during an active loop execution.' });
         return;
       }
     }

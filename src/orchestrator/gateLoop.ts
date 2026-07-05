@@ -282,9 +282,9 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     } catch (e) {}
   };
 
-  req.on('close', () => {
+  res.on('close', () => {
     writeLog(`[SDK] Connection closed. res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed} req.destroyed=${req.destroyed}`);
-    // Only clean up if the socket or response is actually destroyed before cleanly finishing
+    // Only clean up if the response is actually closed or destroyed before cleanly finishing
     if (!res.writableEnded) {
        writeLog('[SDK] Client connection ended or aborted.');
        cleanup();
@@ -356,7 +356,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           stateSnapshot: storedSession.stateSnapshot,
           conversationHistory: storedSession.conversationHistory || [],
           turns: storedSession.turns || [],
-          cwd: storedSession.cwd || DEFAULT_WORKSPACE_DIR,
+          cwd: storedSession.cwd || getWorkspaceRoot(),
           currentModel: storedSession.currentModel || 'gemini-3.1-flash-lite',
           sessionId: currentSessionId,
           copilotSession: null as unknown as CopilotSession, // populated below
@@ -538,6 +538,8 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         ]
       });
     }
+
+    res.write(':\n\n');
 
     let currentPrompt = promptStr;
 
@@ -1122,7 +1124,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
 
             // SYS-REQ-004: Enforce structured tool calls for mutation tasks
-            if (!isDiagnostic && process.env.NODE_ENV !== 'test' && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
+            if (!isDiagnostic && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
                writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`, LogLevel.WARN);
                allGatesPassedInThisCycle = false;
                failedGateName = 'MutationGate';
