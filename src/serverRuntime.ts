@@ -317,6 +317,7 @@ process.on('unhandledRejection', (reason: unknown) => {
 });
 
 export const app = express();
+
 export { db } from './db/index';
 export { appendEscalation, getPendingEscalation, getEscalations } from './utils/escalationStore';
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -375,6 +376,25 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       };
 
       const proxyReq = https.request(options, (proxyRes) => {
+        if (provider === 'gemini' && proxyRes.statusCode && proxyRes.statusCode >= 400) {
+          let errorBody: Buffer[] = [];
+          proxyRes.on('data', d => errorBody.push(d));
+          proxyRes.on('end', () => {
+            let bodyStr = Buffer.concat(errorBody).toString();
+            try {
+              const parsed = JSON.parse(bodyStr);
+              if (Array.isArray(parsed) && parsed.length === 1 && parsed[0].error) {
+                bodyStr = JSON.stringify(parsed[0]);
+              }
+            } catch (e) {
+              // ignore parse errors
+            }
+            res.writeHead(proxyRes.statusCode || 500, { ...proxyRes.headers, 'content-length': Buffer.byteLength(bodyStr).toString() });
+            res.end(bodyStr);
+          });
+          return;
+        }
+
         res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
         proxyRes.pipe(res);
       });

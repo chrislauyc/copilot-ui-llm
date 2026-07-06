@@ -27,6 +27,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
  * of the review call.
  */
 function startProviderProxy(): Promise<Server> {
+  process.env.COPILOT_API_URL = `http://127.0.0.1:${PORT}`;
   return new Promise((resolve, reject) => {
     const server = app.listen(PORT, '127.0.0.1', () => resolve(server));
     server.on('error', reject);
@@ -72,7 +73,9 @@ You must not answer conversationally and must strictly invoke 'submit_code_revie
       {
         toolChoice: { type: 'function', function: { name: submitCodeReviewTool.function.name } },
         allowOthers: false
-      }
+      },
+      undefined,
+      600000
     );
   } finally {
     await stopProviderProxy(proxyServer);

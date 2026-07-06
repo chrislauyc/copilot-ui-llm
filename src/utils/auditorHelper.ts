@@ -130,13 +130,13 @@ export function buildAuditorSessionSettings(
     ],
     tool_choice: responseRequirements.toolChoice,
     onPermissionRequest: async (req: any) => {
-      if (responseRequirements.allowOthers) return { kind: 'approved' };
+      if (responseRequirements.allowOthers) return { kind: 'approve-once' };
 
       const requestedTool = req.toolName || req.name || (req.toolCalls && req.toolCalls[0]?.function?.name);
       const allowed = !requestedTool || requestedTool === toolName || 
         (Array.isArray(req.toolCalls) && req.toolCalls.every((tc: any) => tc.function?.name === toolName));
       
-      return allowed ? { kind: 'approved' } : { kind: 'denied', reason: 'Auditor sessions must not execute tools.' };
+      return allowed ? { kind: 'approve-once' } : { kind: 'reject', reason: 'Auditor sessions must not execute tools.' };
     },
     streaming: false,
   };
@@ -153,7 +153,8 @@ export async function executeAuditSession<T>(
   tool: any,
   userPrompt: string,
   responseRequirements: ResponseRequirement,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  timeoutMs: number = 300000
 ): Promise<T | null> {
   const client = new CopilotClient({
     workingDirectory,
@@ -180,7 +181,7 @@ export async function executeAuditSession<T>(
     console.log('[executeAuditSession] sending and waiting for response...');
     if (abortSignal) {
       await Promise.race([
-        session.sendAndWait({ prompt: userPrompt }, 60000),
+        session.sendAndWait({ prompt: userPrompt }, timeoutMs),
         new Promise<never>((_, reject) => {
           const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
           if (abortSignal.aborted) onAbort();
@@ -188,7 +189,7 @@ export async function executeAuditSession<T>(
         })
       ]);
     } else {
-      await session.sendAndWait({ prompt: userPrompt }, 60000);
+      await session.sendAndWait({ prompt: userPrompt }, timeoutMs);
     }
     console.log('[executeAuditSession] disconnecting session...');
     await session.disconnect();
