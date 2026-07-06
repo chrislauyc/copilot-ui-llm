@@ -6,7 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { validateCwd } from './security/pathGuard';
 import { CopilotClient, CopilotSession, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool, SessionEvent } from './copilotSdk/boundary';
-import { handleGateLoop, handleGateRunPermission, handleGateStream } from './orchestrator/gateLoop';
+import { handleGateLoop, handleGateRunPermission, handleGateStream, globalAutoApproveAll, setGlobalAutoApproveAll } from './orchestrator/gateLoop';
 
 import {
   activeSessions,
@@ -59,6 +59,8 @@ export {
   runLlmAudit,
   lastRunLog,
   handleGateRunPermission,
+  globalAutoApproveAll,
+  setGlobalAutoApproveAll,
 };
 
 export type { CopilotCreateSessionOptions };
