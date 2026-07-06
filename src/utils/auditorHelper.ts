@@ -58,6 +58,44 @@ export function getAuditorExecutionConfig(apiKey?: string): ExecutionConfig {
 }
 
 /**
+ * Shared logic to resolve the reviewer's execution configuration via ProviderRegistry.
+ * Independently configurable from the auditor role (REVIEWER_PROVIDER/REVIEWER_MODEL),
+ * so PR-facing review can use a different, likely stronger, model without affecting
+ * the in-loop spec auditor.
+ * Throws a loud error if no API key is available for the required provider.
+ */
+export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
+  const reviewerConfig = DEFAULT_ROLES_CONFIG.reviewer;
+  const provider = reviewerConfig.provider;
+
+  let keyToUse = apiKey;
+  let envVarName = 'GEMINI_API_KEY';
+
+  if (!keyToUse) {
+    if (provider === 'gemini') {
+      keyToUse = process.env.GEMINI_API_KEY;
+      envVarName = 'GEMINI_API_KEY';
+    } else if (provider === 'anthropic') {
+      keyToUse = process.env.ANTHROPIC_API_KEY;
+      envVarName = 'ANTHROPIC_API_KEY';
+    } else if (provider === 'openai') {
+      keyToUse = process.env.OPENAI_API_KEY;
+      envVarName = 'OPENAI_API_KEY';
+    }
+    if (!keyToUse && provider !== 'gemini' && process.env.GEMINI_API_KEY) {
+      keyToUse = process.env.GEMINI_API_KEY;
+    }
+  }
+
+  if (!keyToUse && provider !== 'copilot-native' && provider !== 'local') {
+    throw new Error(`Missing API key for reviewer provider "${provider}". Expected ${envVarName} to be set.`);
+  }
+
+  const registry = new ProviderRegistry(keyToUse);
+  return registry.getExecutionConfig(reviewerConfig);
+}
+
+/**
  * Shared session settings for auditors:
  * - Configurable tool-call enforcement via responseRequirements
  * - No-conversational-reply enforcement
