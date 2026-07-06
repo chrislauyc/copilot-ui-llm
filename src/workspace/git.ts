@@ -130,6 +130,15 @@ export class GitSandbox {
 
     public async checkoutTaskBranch(taskId: string): Promise<string> {
         return this.withLock(async () => {
+            // Return to base branch first so we don't try to delete the active branch
+            try {
+                await this.git(["checkout", "main"]);
+            } catch (e) {
+                try {
+                    await this.git(["checkout", "master"]);
+                } catch (e2) {}
+            }
+
             // Delete branch if it already exists to start fresh off current clean HEAD
             try {
                 await this.git(["branch", "-D", `task/${taskId}`]);

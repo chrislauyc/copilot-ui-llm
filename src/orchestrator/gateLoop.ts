@@ -117,7 +117,7 @@ function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assis
   return enforceWorkingMemoryTruncation(history);
 }
 
-export let globalAutoApproveAll = true;
+export let globalAutoApproveAll = process.env.NODE_ENV === 'test';
 export function setGlobalAutoApproveAll(val: boolean) {
   globalAutoApproveAll = val;
 }

@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
 import { app } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper';
@@ -99,7 +99,7 @@ You must not answer conversationally and must strictly invoke 'submit_code_revie
     section('Nits', bySeverity('nit')),
   ].filter(Boolean).join('\n\n');
 
-  execSync(`gh pr comment ${prNumber} --body ${JSON.stringify(body)}`, { stdio: 'inherit' });
+  execFileSync('gh', ['pr', 'comment', prNumber, '--body', body], { stdio: 'inherit' });
 }
 
 main().catch((err) => {
