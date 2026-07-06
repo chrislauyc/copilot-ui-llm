@@ -1,4 +1,6 @@
 import { execSync } from 'node:child_process';
+import type { Server } from 'node:http';
+import { app } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper';
 import { submitCodeReviewTool } from '../src/config/tools';
 
@@ -12,6 +14,27 @@ interface CodeReviewFinding {
 interface CodeReviewResult {
   findings: CodeReviewFinding[];
   summary: string;
+}
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+/**
+ * ProviderRegistry routes gemini (and other non-anthropic-direct) calls through
+ * this app's own '/api/providers/:provider/*' proxy route rather than hitting
+ * the upstream API directly (see src/serverRuntime.ts). That route is normally
+ * only reachable because the full app server is already running. This script
+ * runs headless in CI, so it has to stand the proxy up itself for the duration
+ * of the review call.
+ */
+function startProviderProxy(): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(PORT, '127.0.0.1', () => resolve(server));
+    server.on('error', reject);
+  });
+}
+
+function stopProviderProxy(server: Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 async function main() {
@@ -37,17 +60,23 @@ You must not answer conversationally and must strictly invoke 'submit_code_revie
 
   const executionConfig = getReviewerExecutionConfig();
 
-  const result = await executeAuditSession<CodeReviewResult>(
-    process.cwd(),
-    executionConfig,
-    systemPrompt,
-    submitCodeReviewTool,
-    `PR DIFF:\n${diff}`,
-    {
-      toolChoice: { type: 'function', function: { name: submitCodeReviewTool.function.name } },
-      allowOthers: false
-    }
-  );
+  const proxyServer = await startProviderProxy();
+  let result: CodeReviewResult | null;
+  try {
+    result = await executeAuditSession<CodeReviewResult>(
+      process.cwd(),
+      executionConfig,
+      systemPrompt,
+      submitCodeReviewTool,
+      `PR DIFF:\n${diff}`,
+      {
+        toolChoice: { type: 'function', function: { name: submitCodeReviewTool.function.name } },
+        allowOthers: false
+      }
+    );
+  } finally {
+    await stopProviderProxy(proxyServer);
+  }
 
   if (!result) {
     console.error('Reviewer failed to return findings.');
