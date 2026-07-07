@@ -102,7 +102,7 @@ export class ProviderRegistry {
       return {
         type: 'openai',
         // default known endpoint for OpenRouter; allow override via OPENROUTER_BASE_URL if needed
-        baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions/',
+        baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/',
         apiKey
       };
     } else if (provider === 'openai') {
