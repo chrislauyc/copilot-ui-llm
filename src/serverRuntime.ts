@@ -149,7 +149,7 @@ const envPath = path.join(process.cwd(), '.env');
 
 function rebuildSensitiveValuesCache() {
   const newValues = new Set<string>();
-  const SECRET_ENV_WHITELIST = ['GEMINI_API_KEY', 'COPILOT_JWT', 'COPILOT_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET'];
+  const SECRET_ENV_WHITELIST = ['GEMINI_API_KEY', 'COPILOT_JWT', 'COPILOT_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'];
 
   // Process env keys from the whitelist only
   for (const envKey of SECRET_ENV_WHITELIST) {

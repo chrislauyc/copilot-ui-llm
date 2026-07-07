@@ -80,6 +80,16 @@ export class ProviderRegistry {
         baseUrl: 'https://api.anthropic.com/v1/',
         apiKey
       };
+    } else if (provider === 'openrouter') {
+      const apiKey = process.env.OPENROUTER_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined);
+      if (!apiKey) {
+        throw new Error('Missing API key for OpenRouter provider. Expected OPENROUTER_API_KEY to be set.');
+      }
+      return {
+        type: 'openai',
+        baseUrl: 'https://openrouter.ai/api/v1/',
+        apiKey
+      };
     } else if (provider === 'local') {
       return {
         type: 'openai',
