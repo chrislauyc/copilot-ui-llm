@@ -130,6 +130,9 @@ export function mapOpenAIModel(rawModel: string): string {
   if (DEFAULT_ROLES_CONFIG.auditor.model === cleaned || DEFAULT_ROLES_CONFIG.auditor.model.includes(cleaned)) {
     return DEFAULT_ROLES_CONFIG.auditor.model;
   }
+  if (DEFAULT_ROLES_CONFIG.committer && (DEFAULT_ROLES_CONFIG.committer.model === cleaned || DEFAULT_ROLES_CONFIG.committer.model.includes(cleaned))) {
+    return DEFAULT_ROLES_CONFIG.committer.model;
+  }
   return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
 }
 

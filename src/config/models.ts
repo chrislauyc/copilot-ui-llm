@@ -14,6 +14,7 @@ export interface SystemRolesConfig {
   executorTiers: ModelProviderConfig[]; // Tiered ladder for execution
   auditor: ModelProviderConfig;
   reviewer: ModelProviderConfig;
+  committer: ModelProviderConfig; // Committer role
 }
 
 export const KNOWN_MODELS_CONFIG: ModelProviderConfig[] = [
@@ -60,6 +61,11 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
     provider: (typeof process !== 'undefined' && process.env?.REVIEWER_PROVIDER as ProviderType) || 'gemini',
     model: (typeof process !== 'undefined' && process.env?.REVIEWER_MODEL) || 'gemini-3.1-pro-preview',
     tokenRatio: 3.0
+  },
+  committer: {
+    provider: (typeof process !== 'undefined' && process.env?.COMMITTER_PROVIDER as ProviderType) || (typeof process !== 'undefined' && process.env?.EXECUTOR_TIER_0_PROVIDER as ProviderType) || 'gemini',
+    model: (typeof process !== 'undefined' && process.env?.COMMITTER_MODEL) || (typeof process !== 'undefined' && process.env?.EXECUTOR_TIER_0_MODEL) || 'gemini-3.1-flash-lite',
+    tokenRatio: (typeof process !== 'undefined' && process.env?.COMMITTER_TOKEN_RATIO ? parseFloat(process.env.COMMITTER_TOKEN_RATIO) : 3.5)
   }
 };
 
