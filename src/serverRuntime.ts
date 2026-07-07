@@ -64,7 +64,7 @@ export {
 };
 
 export type { CopilotCreateSessionOptions };
-import { DEFAULT_ROLES_CONFIG } from './config/models';
+import { DEFAULT_ROLES_CONFIG, ProviderType } from './config/models';
 import { runGate, runTests, runLint, runWithTimeout } from './gates';
 import { MODEL_TIERS, getNextTier } from './config/models';
 import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId } from './types/session';
@@ -149,7 +149,7 @@ const envPath = path.join(process.cwd(), '.env');
 
 function rebuildSensitiveValuesCache() {
   const newValues = new Set<string>();
-  const SECRET_ENV_WHITELIST = ['GEMINI_API_KEY', 'COPILOT_JWT', 'COPILOT_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'];
+  const SECRET_ENV_WHITELIST = ['GEMINI_API_KEY', 'COPILOT_JWT', 'COPILOT_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'] as const;
 
   // Process env keys from the whitelist only
   for (const envKey of SECRET_ENV_WHITELIST) {
@@ -170,7 +170,7 @@ function rebuildSensitiveValuesCache() {
           const parts = trimmed.split('=');
           if (parts.length >= 2) {
             const key = parts[0]?.trim();
-            if (key && SECRET_ENV_WHITELIST.includes(key)) {
+            if (key && (SECRET_ENV_WHITELIST as readonly string[]).includes(key)) {
               const val = parts.slice(1).join('=').trim().replace(/^["']|["']$/g, '');
               if (val && val.length > 4 && val !== 'MY_GEMINI_API_KEY') {
                 newValues.add(val);
@@ -234,7 +234,7 @@ function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assis
  * Maps a provider type to its corresponding environment variable key.
  * Falls back to GEMINI_API_KEY when the provider-specific key is not set.
  */
-function resolveProviderSpecificKey(providerType: string): string | undefined {
+function resolveProviderSpecificKey(providerType: ProviderType): string | undefined {
   switch (providerType) {
     case "gemini":
       return process.env.GEMINI_API_KEY;
@@ -247,8 +247,10 @@ function resolveProviderSpecificKey(providerType: string): string | undefined {
     case "copilot-native":
     case "local":
       return undefined;
-    default:
+    default: {
+      const _exhaustiveCheck: never = providerType;
       return process.env.GEMINI_API_KEY;
+    }
   }
 }
 
@@ -564,7 +566,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     let testClient: CopilotClient | null = null;
     try {
       const { apiKey, model } = req.query;
-      const activeModel = (model as string) || "gemini-3.1-flash-lite";
+      const activeModel = (typeof model === "string" ? model : undefined) || "gemini-3.1-flash-lite";
 
       // Resolve the provider first to determine which env var to check for the key
       const detectionInstance = new ProviderRegistry(undefined);
@@ -574,7 +576,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
       const providerSpecificKey =
         resolveProviderSpecificKey(activeProviderType);
-      const keyToUse = (apiKey as string) || providerSpecificKey;
+      const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
 
       const registryInstance = new ProviderRegistry(keyToUse);
       const executionConfig = registryInstance.getExecutionConfig(activeModel);
@@ -938,7 +940,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
     try {
       const { prompt, apiKey, model, cwd, sessionId } = req.body;
-      const targetModel = (model as string) || "gemini-3.1-flash-lite";
+      const targetModel = (typeof model === "string" ? model : undefined) || "gemini-3.1-flash-lite";
 
       // Resolve the provider first to determine which env var to check for the key
       const detectionInstance = new ProviderRegistry(undefined);
@@ -948,7 +950,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
       const providerSpecificKey =
         resolveProviderSpecificKey(activeProviderType);
-      const keyToUse = (apiKey as string) || providerSpecificKey;
+      const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
 
       if (sessionId) {
         const sess = activeSessions.get(sessionId);
