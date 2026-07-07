@@ -89,6 +89,22 @@ export class GitSandbox {
         }
     }
 
+    /**
+     * Safely checks out the primary base branch, falling back in order of preference.
+     * Deduplicates candidates to avoid redundant CLI invocations.
+     */
+    private async checkoutBaseBranch(): Promise<string> {
+        const candidates = Array.from(new Set([this.baseBranch, "main", "master"]));
+        for (const branch of candidates) {
+            try {
+                return await this.git(["checkout", branch]);
+            } catch (e) {
+                // Continue to fallback candidate
+            }
+        }
+        throw new Error(`Failed to checkout any base branch. Tried: ${candidates.join(", ")}`);
+    }
+
     // -------------------------------------------------------------------------
     // Public methods — each delegates to a private *Impl so that withLock wraps
     // the full operation boundary rather than individual git() calls.
@@ -133,15 +149,9 @@ export class GitSandbox {
         return this.withLock(async () => {
             // Return to base branch first so we don't try to delete the active branch
             try {
-                await this.git(["checkout", this.baseBranch]);
+                await this.checkoutBaseBranch();
             } catch (e) {
-                try {
-                    await this.git(["checkout", "main"]);
-                } catch (e2) {
-                    try {
-                        await this.git(["checkout", "master"]);
-                    } catch (e3) {}
-                }
+                // Ignore failure if we can't switch, but try to proceed
             }
 
             // Delete branch if it already exists to start fresh off current clean HEAD
@@ -192,15 +202,7 @@ export class GitSandbox {
             }
 
             // Return to base branch
-            try {
-                return await this.git(["checkout", this.baseBranch]);
-            } catch (e) {
-                try {
-                    return await this.git(["checkout", "main"]);
-                } catch (e2) {
-                    return await this.git(["checkout", "master"]);
-                }
-            }
+            return await this.checkoutBaseBranch();
         });
     }
 
@@ -277,16 +279,14 @@ export class GitSandbox {
             const current = await this.git(["rev-parse", "--abbrev-ref", "HEAD"]);
             if (current && current !== "HEAD") {
                 this.baseBranch = current;
+            } else {
+                const fallback = await this.git(["branch", "--show-current"]);
+                if (fallback) {
+                    this.baseBranch = fallback;
+                }
             }
         } catch (e) {
-            try {
-                const current = await this.git(["branch", "--show-current"]);
-                if (current) {
-                    this.baseBranch = current;
-                }
-            } catch (e2) {
-                // Keep default "main"
-            }
+            // Keep default "main" if Git commands fail
         }
     }
 
