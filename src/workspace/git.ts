@@ -281,8 +281,34 @@ export class GitSandbox {
                 this.baseBranch = current;
             } else {
                 const fallback = await this.git(["branch", "--show-current"]);
-                if (fallback) {
+                if (fallback && fallback !== "HEAD") {
                     this.baseBranch = fallback;
+                } else {
+                    // Detached HEAD state. Try to find the default branch from origin/HEAD first.
+                    try {
+                        const remoteHead = await this.git(["rev-parse", "--abbrev-ref", "origin/HEAD"]);
+                        if (remoteHead && remoteHead.startsWith("origin/")) {
+                            this.baseBranch = remoteHead.substring("origin/".length);
+                        }
+                    } catch (remoteError) {
+                        // If origin/HEAD is not available, try to resolve via name-rev as fallback
+                        try {
+                            const nameRev = await this.git(["name-rev", "--name-only", "HEAD"]);
+                            if (nameRev && !nameRev.includes("~") && !nameRev.includes("^") && nameRev !== "undefined") {
+                                let cleanName = nameRev;
+                                if (cleanName.startsWith("remotes/origin/")) {
+                                    cleanName = cleanName.substring("remotes/origin/".length);
+                                } else if (cleanName.startsWith("origin/")) {
+                                    cleanName = cleanName.substring("origin/".length);
+                                }
+                                if (cleanName && cleanName !== "HEAD") {
+                                    this.baseBranch = cleanName;
+                                }
+                            }
+                        } catch (nameRevError) {
+                            // Keep default "main"
+                        }
+                    }
                 }
             }
         } catch (e) {
