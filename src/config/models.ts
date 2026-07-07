@@ -8,6 +8,10 @@ export const PROVIDERS = [
 ] as const;
 export type ProviderType = (typeof PROVIDERS)[number];
 
+export function isProviderType(p: unknown): p is ProviderType {
+  return typeof p === "string" && (PROVIDERS as readonly string[]).includes(p);
+}
+
 export interface ModelProviderConfig {
   readonly provider: ProviderType;
   readonly model: string;
@@ -61,7 +65,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
   planner: {
     provider:
       (typeof process !== "undefined" &&
-        (process.env?.PLANNER_PROVIDER as ProviderType)) ||
+        (isProviderType(process.env?.PLANNER_PROVIDER) ? process.env?.PLANNER_PROVIDER : undefined)) ||
       "gemini",
     model:
       (typeof process !== "undefined" && process.env?.PLANNER_MODEL) ||
@@ -75,7 +79,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
     {
       provider:
         (typeof process !== "undefined" &&
-          (process.env?.EXECUTOR_TIER_0_PROVIDER as ProviderType)) ||
+          (isProviderType(process.env?.EXECUTOR_TIER_0_PROVIDER) ? process.env?.EXECUTOR_TIER_0_PROVIDER : undefined)) ||
         "gemini",
       model:
         (typeof process !== "undefined" &&
@@ -86,7 +90,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
     {
       provider:
         (typeof process !== "undefined" &&
-          (process.env?.EXECUTOR_TIER_1_PROVIDER as ProviderType)) ||
+          (isProviderType(process.env?.EXECUTOR_TIER_1_PROVIDER) ? process.env?.EXECUTOR_TIER_1_PROVIDER : undefined)) ||
         "gemini",
       model:
         (typeof process !== "undefined" &&
@@ -97,7 +101,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
     {
       provider:
         (typeof process !== "undefined" &&
-          (process.env?.EXECUTOR_TIER_2_PROVIDER as ProviderType)) ||
+          (isProviderType(process.env?.EXECUTOR_TIER_2_PROVIDER) ? process.env?.EXECUTOR_TIER_2_PROVIDER : undefined)) ||
         "gemini",
       model:
         (typeof process !== "undefined" &&
@@ -109,7 +113,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
   auditor: {
     provider:
       (typeof process !== "undefined" &&
-        (process.env?.AUDITOR_PROVIDER as ProviderType)) ||
+        (isProviderType(process.env?.AUDITOR_PROVIDER) ? process.env?.AUDITOR_PROVIDER : undefined)) ||
       "gemini",
     model:
       (typeof process !== "undefined" && process.env?.AUDITOR_MODEL) ||
@@ -119,7 +123,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
   reviewer: {
     provider:
       (typeof process !== "undefined" &&
-        (process.env?.REVIEWER_PROVIDER as ProviderType)) ||
+        (isProviderType(process.env?.REVIEWER_PROVIDER) ? process.env?.REVIEWER_PROVIDER : undefined)) ||
       "gemini",
     model:
       (typeof process !== "undefined" && process.env?.REVIEWER_MODEL) ||

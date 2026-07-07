@@ -139,7 +139,7 @@ export class ProviderRegistry {
       providerType = input.provider;
       model = this.getMappedModel(input.model);
     } else {
-      model = this.getMappedModel(input);
+      model = this.getMappedModel(input as string);
       // Look up model in all configs to find its configured provider.
       // Prefer exact matches. If none, pick the longest partial match to avoid shorter substrings shadowing longer models.
       const allConfigs = [
