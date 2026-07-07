@@ -607,8 +607,10 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       const snap = sessRecord.stateSnapshot;
       if (snap.currentPrompt) {
         promptStr = snap.currentPrompt;
+        writeLog("[DEBUG PROMPT] RESUME DETECTED! snap.currentPrompt=" + snap.currentPrompt + " input=" + input + " failedGateName=" + snap.failedGateName);
         if (input && snap.failedGateName) {
           promptStr = formatHumanEscalationPrompt(promptStr, snap.failedGateName, snap.failedGateFeedback || '', input);
+          writeLog("[DEBUG PROMPT] Formatted promptStr=" + promptStr);
         }
       }
     }
@@ -1025,7 +1027,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       // 1. Park the current active task branch (which commits changes, saves branch name, and returns to base)
       if (activeTaskId) {
         try {
-          await getGitSandbox().parkTaskBranch(activeTaskId);
+          await getGitSandbox().parkTaskBranch(activeTaskId, client, registryInstance);
           writeLog(`[GateLoop] Parked task branch for: ${activeTaskId}`);
         } catch (e) {
           writeLog(`[GateLoop] Error parking task branch on terminal escalation: ${e}`);

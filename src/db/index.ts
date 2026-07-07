@@ -11,7 +11,8 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const dbPath = path.join(dbDir, isTestMode ? 'app-test.db' : 'app.db');
+const workerId = process.env.VITEST_WORKER_ID || process.env.VITEST_POOL_ID || '0';
+const dbPath = path.join(dbDir, isTestMode ? `app-test-${workerId}.db` : 'app.db');
 export const db = new Database(dbPath);
 
 db.exec(`

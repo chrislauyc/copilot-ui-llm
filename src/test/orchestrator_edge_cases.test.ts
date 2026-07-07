@@ -29,6 +29,13 @@ async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, conte
 }
 
 describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 30000 }, () => {
+  beforeAll(() => {
+    fs.writeFileSync(path.join(getWorkspaceRoot(), 'package.json'), JSON.stringify({
+      scripts: {
+        test: "echo 'FAIL: 2 tests failed\ngate: failed' && exit 1"
+      }
+    }));
+  });
   let server: http.Server;
   let serverPort: number;
   let proxy: CapiProxy;
@@ -178,7 +185,7 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         sessionId: 'retry-validation-session', 
-        prompt: 'always fail lint', 
+        prompt: 'Run the gate check.', 
         model: 'gemini-3.1-flash-lite', 
         maxRetries: 2 
       })

@@ -39,7 +39,11 @@ export class ProviderRegistry {
     if (DEFAULT_ROLES_CONFIG.auditor.model === cleaned || DEFAULT_ROLES_CONFIG.auditor.model.includes(cleaned)) {
       return DEFAULT_ROLES_CONFIG.auditor.model;
     }
-    
+    if (DEFAULT_ROLES_CONFIG.committer && (DEFAULT_ROLES_CONFIG.committer.model === cleaned || DEFAULT_ROLES_CONFIG.committer.model.includes(cleaned))) {
+      return DEFAULT_ROLES_CONFIG.committer.model;
+    }
+    const matchedKnown = KNOWN_MODELS_CONFIG.find(m => m.model === cleaned || m.model.includes(cleaned) || cleaned.includes(m.model));
+    if (matchedKnown) return matchedKnown.model;
     return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
   }
 
@@ -120,14 +124,22 @@ export class ProviderRegistry {
       providerType = input.provider;
       model = this.getMappedModel(input.model);
     } else {
+      if (input === 'committer' && DEFAULT_ROLES_CONFIG.committer) {
+        return {
+          model: DEFAULT_ROLES_CONFIG.committer.model,
+          providerType: DEFAULT_ROLES_CONFIG.committer.provider,
+          provider: this.getProviderConfig(DEFAULT_ROLES_CONFIG.committer.provider, DEFAULT_ROLES_CONFIG.committer.model)
+        };
+      }
       model = this.getMappedModel(input);
       // Look up model in all configs to find its configured provider
       const allConfigs = [
         DEFAULT_ROLES_CONFIG.planner,
         DEFAULT_ROLES_CONFIG.auditor,
+        DEFAULT_ROLES_CONFIG.committer,
         ...DEFAULT_ROLES_CONFIG.executorTiers,
         ...KNOWN_MODELS_CONFIG
-      ];
+      ].filter(Boolean);
 
       const matchedConfig = allConfigs.find(t => 
         t.model === model || model.includes(t.model) || t.model.includes(model)

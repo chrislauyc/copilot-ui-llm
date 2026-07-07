@@ -66,7 +66,7 @@ export {
 export type { CopilotCreateSessionOptions };
 import { DEFAULT_ROLES_CONFIG } from './config/models';
 import { runGate, runTests, runLint, runWithTimeout } from './gates';
-import { MODEL_TIERS, getNextTier } from './config/models';
+import { MODEL_TIERS, getNextTier, KNOWN_MODELS_CONFIG } from './config/models';
 import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId } from './types/session';
 import { ExecutionConfig, ProviderConfig } from './utils/providerRegistry';
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './utils/prompt';
@@ -130,6 +130,11 @@ export function mapOpenAIModel(rawModel: string): string {
   if (DEFAULT_ROLES_CONFIG.auditor.model === cleaned || DEFAULT_ROLES_CONFIG.auditor.model.includes(cleaned)) {
     return DEFAULT_ROLES_CONFIG.auditor.model;
   }
+  if (DEFAULT_ROLES_CONFIG.committer && (DEFAULT_ROLES_CONFIG.committer.model === cleaned || DEFAULT_ROLES_CONFIG.committer.model.includes(cleaned))) {
+    return DEFAULT_ROLES_CONFIG.committer.model;
+  }
+  const matchedKnown = KNOWN_MODELS_CONFIG.find(m => m.model === cleaned || m.model.includes(cleaned) || cleaned.includes(m.model));
+  if (matchedKnown) return matchedKnown.model;
   return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
 }
 

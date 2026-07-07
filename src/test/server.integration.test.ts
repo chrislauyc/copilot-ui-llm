@@ -1,6 +1,11 @@
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { serverHarness } from './harness/ServerHarness';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import { getExecCommand } from '../workspace';
 
 describe('Server End-to-End Integration Tests', () => {
@@ -21,7 +26,7 @@ describe('Server End-to-End Integration Tests', () => {
     // Create unique sessionId and tempCwd
     const sessionId = 'session-' + Math.random().toString(36).substring(2, 8);
     const tempCwd = `git-worktree-${sessionId}`;
-    const snapshotPath = process.cwd() + '/src/test/snapshots/gate_loop/single_retry_server_integration.yaml';
+    const snapshotPath = path.resolve(__dirname, 'snapshots/gate_loop/single_retry_server_integration.yaml');
     
     const exec = getExecCommand();
     await exec(`mkdir -p '${tempCwd}'`);

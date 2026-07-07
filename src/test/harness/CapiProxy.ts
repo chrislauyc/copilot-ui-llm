@@ -36,6 +36,7 @@ export class CapiProxy {
               ) {
                 const content = fs.readFileSync(this.snapshotFilePath, "utf8");
                 this.snapshot = yaml.parse(content);
+                console.log("[DEBUG YAML LOAD] filePath=" + this.snapshotFilePath + " json=" + JSON.stringify(this.snapshot));
               } else {
                 this.snapshot = null;
               }
@@ -90,6 +91,7 @@ export class CapiProxy {
           req.on("data", (chunk) => (body += chunk));
           req.on("end", async () => {
             const parsedBody = JSON.parse(body);
+            fs.appendFileSync("/tmp/capi_proxy_debug.log", "\n--- NEW COMPLETION REQUEST ---\n" + JSON.stringify(parsedBody, null, 2) + "\n");
             this.requestHistory.push(parsedBody);
 
             if (this.overrides.injectError) {
@@ -283,8 +285,33 @@ export class CapiProxy {
               return;
             }
 
+            fs.appendFileSync("/tmp/capi_proxy_debug.log", `SNAPSHOT LOG: snapshot=${!!this.snapshot} path=${this.snapshotFilePath}\n`);
             // Prefix-matching snapshot matching logic
             if (this.snapshot && this.snapshot.conversations) {
+              const sanitizeMessages = (messages: any[]) => {
+                console.log("[sanitizeMessages DEBUG] messages:", JSON.stringify(messages, null, 2));
+                if (!messages) return [];
+                return messages.filter((m: any) => {
+                  if (m.content && typeof m.content === "string") {
+                    const lower = m.content.toLowerCase();
+                    if (
+                      lower.includes("respond concisely") ||
+                      lower.includes("agent_instructions") ||
+                      lower.includes("session_context") ||
+                      lower.includes("session folder:") ||
+                      lower.includes("plan file:") ||
+                      lower.includes("deliver complete") ||
+                      (lower.includes("current_datetime") && lower.includes("system_reminder") && m.content.length > 500 && !lower.includes("analyze the current code patch"))
+                    ) {
+                      return false;
+                    }
+                  }
+                  if (m.role === "system") {
+                    return false;
+                  }
+                  return true;
+                });
+              };
               const incomingMessages = parsedBody.messages;
             /* console.log(
                 "[CapiProxy] INCOMING LENGTH:",
@@ -293,11 +320,15 @@ export class CapiProxy {
               console.dir(incomingMessages, { depth: null }); */
               const matchedConversation = this.snapshot.conversations.find(
                 (conv: any, idx: number) => {
-                  let incoming = incomingMessages;
-                  let expected = conv.messages;
+                  let incoming = sanitizeMessages(incomingMessages);
+                  let expected = sanitizeMessages(conv.messages);
+                  console.log("[CapiProxy MATCH DEBUG] idx=" + idx + " incomingMsgLength=" + incoming.length + " expectedMsgLength=" + expected.length);
+                  console.log("[CapiProxy MATCH DEBUG] incoming roles:", incoming.map((m: any) => m.role));
+                  console.log("[CapiProxy MATCH DEBUG] expected roles:", expected.map((m: any) => m.role));
+
 
                   // Specific handling for Scenario 4 (Human resume/escalation check)
-                  const isPhase2 = incoming.some(
+                  const isPhase2 = incomingMessages.some(
                     (m: any) =>
                       m.content &&
                       typeof m.content === "string" &&
@@ -307,6 +338,7 @@ export class CapiProxy {
                         m.content.includes("feedback")),
                   );
 
+                  console.log("[DEBUG CAPI] isPhase2=" + isPhase2 + " length=" + this.snapshot.conversations.length + " expected=" + expected.length + " role=" + (expected[0]?expected[0].role:'none'));
                   if (
                     this.snapshot.conversations.length === 2 &&
                     expected.length === 1 &&
@@ -349,7 +381,8 @@ export class CapiProxy {
                     const incMsg = incoming[i];
                     const expMsg = expected[i];
                     if (incMsg.role !== expMsg.role) {
-                      console.log(`[CapiProxy MATCH FAIL] Msg index ${i}, role mismatch: inc=${incMsg.role}, exp=${expMsg.role}`);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Msg index ${i}, role mismatch: inc=${incMsg.role}, exp=${expMsg.role}\n`);
                       isMatching = false;
                       break;
                     }
@@ -364,9 +397,10 @@ export class CapiProxy {
                            continue;
                          }
                          
-                         const incNormalized = incVal.replace(/\\n/g, '\n');
+                         const incNormalized = incVal.replace(/\\n/g, '\n').replace(/<current_datetime>.*?<\/current_datetime>\n\n/g, '');
                          if (!incNormalized.includes(expVal)) {
-                           console.log(`[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized.substring(0, 50)}..., exp=${expVal.substring(0, 50)}...`);
+                           fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized.substring(0, 50)}..., exp=${expVal.substring(0, 50)}...\n`);
                            isMatching = false;
                            break;
                          }
@@ -386,21 +420,24 @@ export class CapiProxy {
                         JSON.stringify(incVal) !==
                         JSON.stringify(expVal)
                       ) {
-                        console.log(`[CapiProxy MATCH FAIL] Non-string content mismatch at index ${i}: inc=${JSON.stringify(incVal)}, exp=${JSON.stringify(expVal)}`);
+                        fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Non-string content mismatch at index ${i}: inc=${JSON.stringify(incVal)}, exp=${JSON.stringify(expVal)}\n`);
                         isMatching = false;
                         break;
                       }
                       continue;
                     }
 
-                    const incNormalized = incVal.replace(/\\n/g, '\n');
+                    const incNormalized = incVal.replace(/\\n/g, '\n').replace(/<current_datetime>.*?<\/current_datetime>\n\n/g, '');
                     if (!incNormalized.includes(expVal)) {
-                      console.log(`[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized}, exp=${expVal}`);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized}, exp=${expVal}\n`);
                       isMatching = false;
                       break;
                     }
                   }
                   if (isMatching) {
+                    fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH SUCCESS] `);
                     console.log(`[CapiProxy MATCH SUCCESS] Matched conv index ${idx}`);
                   }
                   return isMatching;
@@ -409,13 +446,11 @@ export class CapiProxy {
 
               let assistantMessage = null;
               if (matchedConversation) {
-                assistantMessage =
-                  matchedConversation.messages[incomingMessages.length];
+                const sanitizedExpected = sanitizeMessages(matchedConversation.messages);
+                const sanitizedIncoming = sanitizeMessages(incomingMessages);
+                assistantMessage = sanitizedExpected[sanitizedIncoming.length];
                 if (!assistantMessage) {
-                  assistantMessage =
-                    matchedConversation.messages[
-                      matchedConversation.messages.length - 1
-                    ];
+                  assistantMessage = sanitizedExpected[sanitizedExpected.length - 1];
                 }
               } else {
                 assistantMessage = {

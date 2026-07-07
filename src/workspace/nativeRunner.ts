@@ -8,7 +8,7 @@ import { killProcessGroup } from "./processGroup";
 // OS temp root (respects TMPDIR/TEMP/TMP) and returns its path — avoiding
 // the need to hand-roll uniqueness with crypto.randomUUID() plus a
 // separate mkdirSync call.
-const FIXED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "app-"));
+const FIXED_WORKSPACE_ROOT = (process.env.NODE_ENV === "test" || process.env.VITEST === "true") ? fs.mkdtempSync(path.join(os.tmpdir(), "app-")) : (process.env.APPLET_WORKSPACE_ROOT || "/app/applet");
 
 const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
 

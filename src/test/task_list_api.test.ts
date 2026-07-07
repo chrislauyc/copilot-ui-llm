@@ -24,6 +24,9 @@ describe('Task List API', () => {
     expect(escBody.escalations).toEqual([]);
 
     const sessRes = await fetch(`http://localhost:${serverPort}/api/sessions`);
+    if (sessRes.status !== 200) {
+      console.error("SESS_ERR:", await sessRes.text());
+    }
     expect(sessRes.status).toBe(200);
     const sessBody = await sessRes.json();
     expect(sessBody.sessions).toEqual([]);
@@ -31,7 +34,6 @@ describe('Task List API', () => {
 
   it('should return escalations correctly serialized', async () => {
     const { serverPort } = serverHarness;
-
     db.prepare(`
       INSERT INTO escalations (
         id, sessionId, escalatedAt, summary, failedGate, failedGateFeedback,

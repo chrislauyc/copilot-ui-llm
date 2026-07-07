@@ -182,11 +182,79 @@ export class GitSandbox {
         });
     }
 
-    public async parkTaskBranch(taskId: string): Promise<void> {
+    public async parkTaskBranch(taskId: string, client?: any, registryInstance?: any): Promise<void> {
         return this.withLock(async () => {
             // Stage and commit all current changes on the task branch
             await this.git(["add", "-A"]);
-            await this.git(["commit", "--allow-empty", "-m", `Park task ${taskId}`]);
+
+            let diff = "";
+            try {
+                diff = await this.git(["diff", "--cached"]);
+            } catch (e) {
+                // Ignore diff error
+            }
+
+            let taskTitle = "";
+            let taskDesc = "";
+            try {
+                const { getTask } = await import("../db/taskStore");
+                const task = getTask(taskId);
+                if (task) {
+                    taskTitle = task.title || "";
+                    taskDesc = task.description || "";
+                }
+            } catch (err) {
+                // Ignore
+            }
+
+            let commitMessage = `Park task ${taskId}`;
+
+            if (diff.trim() && client && registryInstance) {
+                try {
+                    const executionConfig = registryInstance.getExecutionConfig('committer');
+                    const session = await client.createSession({
+                        model: executionConfig.model,
+                        provider: executionConfig.providerType,
+                        autoApproveAll: true
+                    });
+
+                    let aggregatedMessage = "";
+                    const unsub = session.on((event: any) => {
+                        if (event.type === 'assistant.message') {
+                            aggregatedMessage += event.data.content || '';
+                        } else if (event.type === 'assistant.message_delta') {
+                            aggregatedMessage += event.data.deltaContent || '';
+                        }
+                    });
+
+                    const prompt = `Generate a short conventional commit message (e.g., feat: add login button, fix: prevent crash) for the changes made.
+
+Task Title: ${taskTitle}
+Task Description: ${taskDesc}
+
+Git Diff:
+\\\`\\\`\\\`diff
+${diff}
+\\\`\\\`\\\`
+
+Strict Requirements:
+1. Output ONLY the raw conventional commit message.
+2. DO NOT include markdown format, backticks, quotes, explanations, or list items. Just the raw text.`;
+
+                    await session.sendAndWait({ prompt }, 60000);
+                    unsub();
+                    await session.disconnect();
+
+                    const cleaned = aggregatedMessage.trim();
+                    if (cleaned) {
+                        commitMessage = cleaned;
+                    }
+                } catch (err) {
+                    // Fallback to default message on LLM failure
+                }
+            }
+
+            await this.git(["commit", "--allow-empty", "-m", commitMessage]);
 
             // Persist the branch name on the task record in SQLite
             try {
