@@ -46,10 +46,15 @@ function resolvePlannerTokenRatio(): number | undefined {
       ? process.env?.PLANNER_MODEL
       : undefined;
   if (!plannerModel) return undefined;
-  const match = KNOWN_MODELS_CONFIG.find(
-    (c) => c.model === plannerModel || plannerModel.includes(c.model),
-  );
-  return match?.tokenRatio;
+  const exact = KNOWN_MODELS_CONFIG.find((c) => c.model === plannerModel);
+  if (exact) return exact.tokenRatio;
+
+  const partialCandidates = KNOWN_MODELS_CONFIG.filter((c) => plannerModel.includes(c.model));
+  if (partialCandidates.length > 0) {
+    partialCandidates.sort((a, b) => b.model.length - a.model.length);
+    return partialCandidates[0]!.tokenRatio;
+  }
+  return undefined;
 }
 
 export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {

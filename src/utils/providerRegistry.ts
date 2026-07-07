@@ -37,7 +37,7 @@ export class ProviderRegistry {
     const partialCandidates = MODEL_TIERS.filter(m => m.includes(cleaned) || cleaned.includes(m));
     if (partialCandidates.length > 0) {
       partialCandidates.sort((a, b) => b.length - a.length);
-      return partialCandidates[0];
+      return partialCandidates[0]!;
     }
 
     if (DEFAULT_ROLES_CONFIG.planner.model === cleaned || DEFAULT_ROLES_CONFIG.planner.model.includes(cleaned)) {
