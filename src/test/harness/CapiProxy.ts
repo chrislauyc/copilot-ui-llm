@@ -395,7 +395,7 @@ export class CapiProxy {
                            continue;
                          }
                          
-                         const incNormalized = incVal.replace(/\\n/g, '\n');
+                         const incNormalized = incVal.replace(/\\n/g, '\n').replace(/<current_datetime>.*?<\/current_datetime>\n\n/g, '');
                          if (!incNormalized.includes(expVal)) {
                            fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
                       console.log(`[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized.substring(0, 50)}..., exp=${expVal.substring(0, 50)}...`);
@@ -426,7 +426,7 @@ export class CapiProxy {
                       continue;
                     }
 
-                    const incNormalized = incVal.replace(/\\n/g, '\n');
+                    const incNormalized = incVal.replace(/\\n/g, '\n').replace(/<current_datetime>.*?<\/current_datetime>\n\n/g, '');
                     if (!incNormalized.includes(expVal)) {
                       fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
                       console.log(`[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized}, exp=${expVal}`);

@@ -16,7 +16,11 @@ describe('Task List API', () => {
     db.prepare('DELETE FROM escalations').run();
   });
 
-  it('should return empty escalations and sessions', async () => {
+  import { db } from '../db';
+import { sessions } from '../db/schema';
+
+it('should return empty escalations and sessions', async () => {
+    await db.delete(sessions);
     const { serverPort } = serverHarness;
     const escRes = await fetch(`http://localhost:${serverPort}/api/escalations`);
     expect(escRes.status).toBe(200);
@@ -24,7 +28,7 @@ describe('Task List API', () => {
     expect(escBody.escalations).toEqual([]);
 
     const sessRes = await fetch(`http://localhost:${serverPort}/api/sessions`);
-    expect(sessRes.status).toBe(200);
+    if (sessRes.status !== 200) console.error("SESS_ERR:", await sessRes.text()); expect(sessRes.status).toBe(200);
     const sessBody = await sessRes.json();
     expect(sessBody.sessions).toEqual([]);
   });
