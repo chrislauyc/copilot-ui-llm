@@ -22,6 +22,7 @@ export const KNOWN_MODELS_CONFIG: ModelProviderConfig[] = [
   { provider: 'gemini', model: 'gemini-3.5-flash', tokenRatio: 3.5 },
   { provider: 'gemini', model: 'gemini-3.1-pro-preview', tokenRatio: 3.0 },
   { provider: 'anthropic', model: 'claude-3-5-sonnet', tokenRatio: 1.0 },
+  { provider: 'anthropic', model: 'claude-sonnet-4.5', tokenRatio: 1.0 },
   { provider: 'anthropic', model: 'claude-3-haiku', tokenRatio: 1.2 },
   { provider: 'openai', model: 'gpt-4o', tokenRatio: 1.0 },
   { provider: 'openai', model: 'gpt-4o-mini', tokenRatio: 1.5 },

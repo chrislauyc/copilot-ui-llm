@@ -42,7 +42,8 @@ export class ProviderRegistry {
     if (DEFAULT_ROLES_CONFIG.committer && (DEFAULT_ROLES_CONFIG.committer.model === cleaned || DEFAULT_ROLES_CONFIG.committer.model.includes(cleaned))) {
       return DEFAULT_ROLES_CONFIG.committer.model;
     }
-    
+    const matchedKnown = KNOWN_MODELS_CONFIG.find(m => m.model === cleaned || m.model.includes(cleaned) || cleaned.includes(m.model));
+    if (matchedKnown) return matchedKnown.model;
     return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
   }
 

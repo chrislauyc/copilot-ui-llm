@@ -80,6 +80,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
       }
 
       console.log('Finished streaming. Verifying Spec Gate violation response...');
+      console.log('FINAL DATA IS:', finalData);
       
       // Verify compilation checks ran successfully
       assert.ok(

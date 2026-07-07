@@ -37,6 +37,16 @@ class ServerHarness {
     process.env.OPENAI_COMPAT_BASE_URL = this.proxyUrl;
     process.env.NODE_ENV = 'test';
     process.env.GEMINI_API_KEY = 'test-key';
+    const possiblePaths = [
+      path.join('/tmp/copilot-ui-llm', 'node_modules', '@github', 'copilot', 'npm-loader.js'),
+      path.join(process.cwd(), 'node_modules', '@github', 'copilot', 'npm-loader.js')
+    ];
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        process.env.COPILOT_CLI_PATH = p;
+        break;
+      }
+    }
 
     await initializeWorkspace();
 
