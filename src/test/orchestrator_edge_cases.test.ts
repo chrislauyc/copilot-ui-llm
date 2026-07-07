@@ -178,7 +178,7 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         sessionId: 'retry-validation-session', 
-        prompt: 'always fail lint', 
+        prompt: 'Run the gate check.', 
         model: 'gemini-3.1-flash-lite', 
         maxRetries: 2 
       })
