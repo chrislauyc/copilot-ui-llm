@@ -607,8 +607,10 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       const snap = sessRecord.stateSnapshot;
       if (snap.currentPrompt) {
         promptStr = snap.currentPrompt;
+        writeLog("[DEBUG PROMPT] RESUME DETECTED! snap.currentPrompt=" + snap.currentPrompt + " input=" + input + " failedGateName=" + snap.failedGateName);
         if (input && snap.failedGateName) {
           promptStr = formatHumanEscalationPrompt(promptStr, snap.failedGateName, snap.failedGateFeedback || '', input);
+          writeLog("[DEBUG PROMPT] Formatted promptStr=" + promptStr);
         }
       }
     }

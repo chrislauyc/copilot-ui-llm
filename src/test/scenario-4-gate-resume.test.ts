@@ -46,12 +46,18 @@ describe('Scenario 4: Human escalation and gate-resume', () => {
       await proxy.setOverrides({ taskType: 'feature' });
       const snapshotPath = path.resolve(tempCwd, 'scenario4.yaml');
       fs.writeFileSync(snapshotPath, `conversations:
-  - messages: # Initial Executor Attempt (fails)
+  - messages:
       - role: assistant
-        tool_calls: [{ id: "c1", type: "function", function: { name: "run_terminal_docker", arguments: "{\\"command\\":\\"ls\\"}" } }]
-  - messages: # After resume (success)
+        content: "I have made the changes."
+        tool_calls:
+          - id: "call_1"
+            type: "function"
+            function:
+              name: "write_to_file"
+              arguments: '{"TargetFile": "test.txt", "Content": "fixed"}'
+  - messages:
       - role: assistant
-        content: Proceeding based on human feedback.
+        content: "Proceeding based on human feedback."
 `);
       await proxy.updateConfig({ filePath: snapshotPath, workDir: tempCwd });
 
@@ -75,9 +81,12 @@ describe('Scenario 4: Human escalation and gate-resume', () => {
 
       const stream = res.body;
       let escalated = false;
+let finalData = '';
       if (stream) {
+
         for await (const chunk of stream as any) {
           const data = Buffer.from(chunk as ArrayBuffer).toString('utf-8');
+          finalData += data;
           if (data.includes('loop.escalate_human')) escalated = true;
         }
       }
@@ -100,6 +109,7 @@ describe('Scenario 4: Human escalation and gate-resume', () => {
           resumedContent += Buffer.from(chunk as ArrayBuffer).toString('utf-8');
         }
       }
+      console.log("Resumed content:", resumedContent);
       assert.ok(resumedContent.includes('Proceeding based on human feedback.'), 'Should have resumed and used next snapshot entry');
       
     } finally {

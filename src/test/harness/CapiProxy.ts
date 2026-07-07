@@ -36,6 +36,7 @@ export class CapiProxy {
               ) {
                 const content = fs.readFileSync(this.snapshotFilePath, "utf8");
                 this.snapshot = yaml.parse(content);
+                console.log("[DEBUG YAML LOAD] filePath=" + this.snapshotFilePath + " json=" + JSON.stringify(this.snapshot));
               } else {
                 this.snapshot = null;
               }
@@ -327,7 +328,7 @@ export class CapiProxy {
 
 
                   // Specific handling for Scenario 4 (Human resume/escalation check)
-                  const isPhase2 = incoming.some(
+                  const isPhase2 = incomingMessages.some(
                     (m: any) =>
                       m.content &&
                       typeof m.content === "string" &&
@@ -337,6 +338,7 @@ export class CapiProxy {
                         m.content.includes("feedback")),
                   );
 
+                  console.log("[DEBUG CAPI] isPhase2=" + isPhase2 + " length=" + this.snapshot.conversations.length + " expected=" + expected.length + " role=" + (expected[0]?expected[0].role:'none'));
                   if (
                     this.snapshot.conversations.length === 2 &&
                     expected.length === 1 &&
@@ -380,7 +382,7 @@ export class CapiProxy {
                     const expMsg = expected[i];
                     if (incMsg.role !== expMsg.role) {
                       fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
-                      console.log(`[CapiProxy MATCH FAIL] Msg index ${i}, role mismatch: inc=${incMsg.role}, exp=${expMsg.role}`);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Msg index ${i}, role mismatch: inc=${incMsg.role}, exp=${expMsg.role}\n`);
                       isMatching = false;
                       break;
                     }
@@ -398,7 +400,7 @@ export class CapiProxy {
                          const incNormalized = incVal.replace(/\\n/g, '\n').replace(/<current_datetime>.*?<\/current_datetime>\n\n/g, '');
                          if (!incNormalized.includes(expVal)) {
                            fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
-                      console.log(`[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized.substring(0, 50)}..., exp=${expVal.substring(0, 50)}...`);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized.substring(0, 50)}..., exp=${expVal.substring(0, 50)}...\n`);
                            isMatching = false;
                            break;
                          }
@@ -419,7 +421,7 @@ export class CapiProxy {
                         JSON.stringify(expVal)
                       ) {
                         fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
-                      console.log(`[CapiProxy MATCH FAIL] Non-string content mismatch at index ${i}: inc=${JSON.stringify(incVal)}, exp=${JSON.stringify(expVal)}`);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Non-string content mismatch at index ${i}: inc=${JSON.stringify(incVal)}, exp=${JSON.stringify(expVal)}\n`);
                         isMatching = false;
                         break;
                       }
@@ -429,7 +431,7 @@ export class CapiProxy {
                     const incNormalized = incVal.replace(/\\n/g, '\n').replace(/<current_datetime>.*?<\/current_datetime>\n\n/g, '');
                     if (!incNormalized.includes(expVal)) {
                       fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] `);
-                      console.log(`[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized}, exp=${expVal}`);
+                      fs.appendFileSync("/tmp/capi_proxy_debug.log", `[CapiProxy MATCH FAIL] Substring content mismatch at index ${i}: incNormalized=${incNormalized}, exp=${expVal}\n`);
                       isMatching = false;
                       break;
                     }
