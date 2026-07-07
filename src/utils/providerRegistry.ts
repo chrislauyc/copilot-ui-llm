@@ -99,10 +99,24 @@ export class ProviderRegistry {
       if (!apiKey) {
         throw new Error('Missing API key for OpenRouter provider. Expected OPENROUTER_API_KEY or GEMINI_API_KEY (fallback) to be set.');
       }
+      // Inject provider credentials into process.env to satisfy Copilot SDK custom provider checks
+      process.env.COPILOT_PROVIDER_API_KEY = apiKey;
+      process.env.COPILOT_PROVIDER_BEARER_TOKEN = apiKey;
+
+      const proxyBaseUrl = process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/openrouter/api/v1/` : `http://127.0.0.1:${process.env.PORT || 3000}/api/providers/openrouter/api/v1/`;
+      let finalBaseUrl = process.env.OPENROUTER_BASE_URL || proxyBaseUrl;
+      if (finalBaseUrl) {
+        finalBaseUrl = finalBaseUrl.trim();
+        finalBaseUrl = finalBaseUrl.replace(/\/chat\/completions\/?$/, '/');
+        finalBaseUrl = finalBaseUrl.replace(/\/completions\/?$/, '/');
+        if (!finalBaseUrl.endsWith('/')) {
+          finalBaseUrl += '/';
+        }
+      }
       return {
         type: 'openai',
         // default known endpoint for OpenRouter; allow override via OPENROUTER_BASE_URL if needed
-        baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/',
+        baseUrl: finalBaseUrl,
         apiKey
       };
     } else if (provider === 'openai') {

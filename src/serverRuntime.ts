@@ -385,9 +385,25 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         }
       } else if (provider === 'anthropic') {
         targetHostname = 'api.anthropic.com';
+      } else if (provider === 'openrouter') {
+        targetHostname = 'openrouter.ai';
       }
 
-      const headers = { ...req.headers, host: targetHostname };
+      const headers: Record<string, any> = { ...req.headers, host: targetHostname };
+      if (provider === 'openrouter') {
+        if (!headers.authorization) {
+          const key = process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
+          if (key) {
+            headers.authorization = `Bearer ${key}`;
+          }
+        }
+        if (!headers['http-referer']) {
+          headers['http-referer'] = 'https://github.com/github/copilot';
+        }
+        if (!headers['x-openrouter-title']) {
+          headers['x-openrouter-title'] = 'GitHub Copilot';
+        }
+      }
       delete headers['accept-encoding'];
       headers['content-length'] = Buffer.byteLength(modifiedBody).toString();
 
