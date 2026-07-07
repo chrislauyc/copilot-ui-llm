@@ -15,7 +15,7 @@ interface CodeReviewResult {
   findings: CodeReviewFinding[];
   summary: string;
 }
-
+const PORT = parseInt(process.env.PORT || '3000', 10);
 /**
  * ProviderRegistry routes gemini (and other non-anthropic-direct) calls through
  * this app's own '/api/providers/:provider/*' proxy route rather than hitting
