@@ -16,6 +16,7 @@ export class GitSandbox {
     private readonly execCommand: ExecCommand;
     private busy = false;
     private initialized = false;
+    private baseBranch = "main";
 
     /**
      * @param workTree   Absolute path to the workspace root (host or container).
@@ -132,11 +133,15 @@ export class GitSandbox {
         return this.withLock(async () => {
             // Return to base branch first so we don't try to delete the active branch
             try {
-                await this.git(["checkout", "main"]);
+                await this.git(["checkout", this.baseBranch]);
             } catch (e) {
                 try {
-                    await this.git(["checkout", "master"]);
-                } catch (e2) {}
+                    await this.git(["checkout", "main"]);
+                } catch (e2) {
+                    try {
+                        await this.git(["checkout", "master"]);
+                    } catch (e3) {}
+                }
             }
 
             // Delete branch if it already exists to start fresh off current clean HEAD
@@ -186,11 +191,15 @@ export class GitSandbox {
                 // Ignore or log error
             }
 
-            // Return to base branch (try main, then master)
+            // Return to base branch
             try {
-                return await this.git(["checkout", "main"]);
+                return await this.git(["checkout", this.baseBranch]);
             } catch (e) {
-                return await this.git(["checkout", "master"]);
+                try {
+                    return await this.git(["checkout", "main"]);
+                } catch (e2) {
+                    return await this.git(["checkout", "master"]);
+                }
             }
         });
     }
@@ -263,6 +272,21 @@ export class GitSandbox {
                 "-m",
                 "Sandbox Baseline (pre-existing files)"
             ]);
+        }
+        try {
+            const current = await this.git(["rev-parse", "--abbrev-ref", "HEAD"]);
+            if (current && current !== "HEAD") {
+                this.baseBranch = current;
+            }
+        } catch (e) {
+            try {
+                const current = await this.git(["branch", "--show-current"]);
+                if (current) {
+                    this.baseBranch = current;
+                }
+            } catch (e2) {
+                // Keep default "main"
+            }
         }
     }
 
