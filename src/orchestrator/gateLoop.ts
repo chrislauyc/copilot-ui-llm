@@ -805,6 +805,16 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         }
       } catch (err) {
         writeLog(`[GateLoop] Error checking out/resuming task branch: ${err}`);
+        const taskRecord = getTask(activeTaskId);
+        if (taskRecord) {
+          saveTask({
+            ...taskRecord,
+            status: "blocked",
+            blockedReason: `Failed to checkout/resume branch: ${err instanceof Error ? err.message : String(err)}`,
+            updatedAt: Date.now()
+          });
+        }
+        throw new Error(`Failed to checkout/resume branch: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     
