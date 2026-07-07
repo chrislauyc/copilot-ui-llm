@@ -230,6 +230,28 @@ function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assis
   return enforceWorkingMemoryTruncation(history);
 }
 
+/**
+ * Maps a provider type to its corresponding environment variable key.
+ * Falls back to GEMINI_API_KEY when the provider-specific key is not set.
+ */
+function resolveProviderSpecificKey(providerType: string): string | undefined {
+  switch (providerType) {
+    case "gemini":
+      return process.env.GEMINI_API_KEY;
+    case "openai":
+      return process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY;
+    case "anthropic":
+      return process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
+    case "openrouter":
+      return process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
+    case "copilot-native":
+    case "local":
+      return undefined;
+    default:
+      return process.env.GEMINI_API_KEY;
+  }
+}
+
 const { secureWrite, flushSseAndEnd } = createSseWriter({
   activeSessions,
   sseResToSessionId,
@@ -542,34 +564,48 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     let testClient: CopilotClient | null = null;
     try {
       const { apiKey, model } = req.query;
-      const keyToUse = (apiKey as string) || process.env.GEMINI_API_KEY;
+      const activeModel = (model as string) || "gemini-3.1-flash-lite";
 
-      const activeModel = (model as string) || 'gemini-3.1-flash-lite';
+      // Resolve the provider first to determine which env var to check for the key
+      const detectionInstance = new ProviderRegistry(undefined);
+      const detectionConfig = detectionInstance.getExecutionConfig(activeModel);
+      const activeProviderType = detectionConfig.providerType;
+
+      // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
+      const providerSpecificKey =
+        resolveProviderSpecificKey(activeProviderType);
+      const keyToUse = (apiKey as string) || providerSpecificKey;
+
       const registryInstance = new ProviderRegistry(keyToUse);
       const executionConfig = registryInstance.getExecutionConfig(activeModel);
 
-      // Determine if a key is actually required by checking the mapped provider
-      const activeProviderType = executionConfig.providerType;
-      const requiresKey = activeProviderType !== 'copilot-native' && activeProviderType !== 'local';
+      const requiresKey =
+        activeProviderType !== "copilot-native" &&
+        activeProviderType !== "local";
 
-      if (requiresKey && (!keyToUse || keyToUse === 'MY_GEMINI_API_KEY')) {
-        res.status(400).json({ success: false, error: 'API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key.' });
+      if (requiresKey && (!keyToUse || keyToUse === "MY_GEMINI_API_KEY")) {
+        res.status(400).json({
+          success: false,
+          error:
+            "API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key.",
+        });
         return;
       }
 
       const outputLines: string[] = [];
       const addLine = (msg: string) => {
-        const timestamp = new Date().toISOString().split('T')[1]?.slice(0, -1) || '';
+        const timestamp =
+          new Date().toISOString().split("T")[1]?.slice(0, -1) || "";
         outputLines.push(`[${timestamp}] ${msg}`);
       };
 
       addLine("🔧 Starting Client connection test run...");
       addLine(`Using model: ${activeModel}`);
       addLine("Initializing CopilotClient...");
-      
+
       testClient = new CopilotClient({
         workingDirectory: DEFAULT_WORKSPACE_DIR,
-        logLevel: 'none',
+        logLevel: "none",
         useLoggedInUser: false,
       });
 
@@ -581,15 +617,19 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       testSession = await testClient.createSession({
         model: executionConfig.model,
-        ...(executionConfig.provider ? { provider: executionConfig.provider } : {}),
+        ...(executionConfig.provider
+          ? { provider: executionConfig.provider }
+          : {}),
         streaming: true,
       });
       if (testSession) {
-        addLine(`✓ Test session created successfully. Session ID: ${testSession.sessionId}`);
+        addLine(
+          `✓ Test session created successfully. Session ID: ${testSession.sessionId}`,
+        );
       }
 
       addLine("Sending probe message: 'What is 2+2?'");
-      
+
       let answer = "";
       if (!testSession) throw new Error("testSession is null");
       const currentTestSession = testSession;
@@ -600,10 +640,10 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         }, 12000);
 
         currentTestSession.on((event: SessionEvent) => {
-          if (event.type === 'assistant.message') {
+          if (event.type === "assistant.message") {
             answer = (event.data as { content?: string })?.content || "";
             addLine(`[EVENT] assistant.message: "${answer}"`);
-          } else if (event.type === 'assistant.message_delta') {
+          } else if (event.type === "assistant.message_delta") {
             if ((event.data as { deltaContent?: string })?.deltaContent) {
               // limit delta noise
             }
@@ -611,7 +651,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
             addLine(`[EVENT] ${event.type}`);
           }
 
-          if (event.type === 'session.idle' || event.type === 'session.error') {
+          if (event.type === "session.idle" || event.type === "session.error") {
             clearTimeout(timeout);
             addLine(`✓ Session went idle (run completed). (${event.type})`);
             resolve();
@@ -898,31 +938,43 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
     try {
       const { prompt, apiKey, model, cwd, sessionId } = req.body;
-      const keyToUse = (apiKey as string) || process.env.GEMINI_API_KEY;
+      const targetModel = (model as string) || "gemini-3.1-flash-lite";
+
+      // Resolve the provider first to determine which env var to check for the key
+      const detectionInstance = new ProviderRegistry(undefined);
+      const detectionConfig = detectionInstance.getExecutionConfig(targetModel);
+      const activeProviderType = detectionConfig.providerType;
+
+      // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
+      const providerSpecificKey =
+        resolveProviderSpecificKey(activeProviderType);
+      const keyToUse = (apiKey as string) || providerSpecificKey;
 
       if (sessionId) {
         const sess = activeSessions.get(sessionId);
         if (sess && sess.stateSnapshot?.manualIntervention) {
-          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('Session locked due to manual panic intervention.');
+          res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Session locked due to manual panic intervention.");
           return;
         }
       }
 
-      writeLog(`[API Request] POST /api/copilot/run: model=${model || 'default'}, cwd=${cwd || 'default'}, sessionId=${sessionId || 'none'}, promptLength=${prompt ? prompt.length : 0}`);
+      writeLog(
+        `[API Request] POST /api/copilot/run: model=${model || "default"}, cwd=${cwd || "default"}, sessionId=${sessionId || "none"}, promptLength=${prompt ? prompt.length : 0}`,
+      );
 
-      const targetModel = (model as string) || 'gemini-3.1-flash-lite';
       const registryInstance = new ProviderRegistry(keyToUse);
       const executionConfig = registryInstance.getExecutionConfig(targetModel);
 
-      // Determine if a key is actually required by checking the mapped provider
-      const activeProviderType = executionConfig.providerType;
+      const requiresKey =
+        activeProviderType !== "copilot-native" &&
+        activeProviderType !== "local";
 
-      const requiresKey = activeProviderType !== 'copilot-native' && activeProviderType !== 'local';
-
-      if (requiresKey && (!keyToUse || keyToUse === 'MY_GEMINI_API_KEY')) {
-        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key in the "Bring Your Own Key" input.');
+      if (requiresKey && (!keyToUse || keyToUse === "MY_GEMINI_API_KEY")) {
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(
+          'API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key in the "Bring Your Own Key" input.',
+        );
         return;
       }
 

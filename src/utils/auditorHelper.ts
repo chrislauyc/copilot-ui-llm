@@ -30,66 +30,76 @@ export function getAuditorExecutionConfig(apiKey?: string): ExecutionConfig {
 
   // Resolve the key based on the provider
   let keyToUse = apiKey;
-  let envVarName = 'GEMINI_API_KEY';
+  let envVarName = "GEMINI_API_KEY";
 
   if (!keyToUse) {
-    if (provider === 'gemini') {
+    if (provider === "gemini") {
       keyToUse = process.env.GEMINI_API_KEY;
-      envVarName = 'GEMINI_API_KEY';
-    } else if (provider === 'anthropic') {
+      envVarName = "GEMINI_API_KEY";
+    } else if (provider === "anthropic") {
       keyToUse = process.env.ANTHROPIC_API_KEY;
-      envVarName = 'ANTHROPIC_API_KEY';
-    } else if (provider === 'openai') {
+      envVarName = "ANTHROPIC_API_KEY";
+    } else if (provider === "openai") {
       keyToUse = process.env.OPENAI_API_KEY;
-      envVarName = 'OPENAI_API_KEY';
+      envVarName = "OPENAI_API_KEY";
+    } else if (provider === "openrouter") {
+      keyToUse = process.env.OPENROUTER_API_KEY;
+      envVarName = "OPENROUTER_API_KEY";
     }
     // Fallback to GEMINI_API_KEY if specific one is missing, as many setups route through it
-    if (!keyToUse && provider !== 'gemini' && process.env.GEMINI_API_KEY) {
+    if (!keyToUse && provider !== "gemini" && process.env.GEMINI_API_KEY) {
       keyToUse = process.env.GEMINI_API_KEY;
     }
   }
 
-  if (!keyToUse && provider !== 'copilot-native' && provider !== 'local') {
-    throw new Error(`Missing API key for auditor provider "${provider}". Expected ${envVarName} to be set.`);
+  if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
+    throw new Error(
+      `Missing API key for auditor provider "${provider}". Expected ${envVarName} to be set.`,
+    );
   }
 
   const registry = new ProviderRegistry(keyToUse);
   return registry.getExecutionConfig(auditorConfig);
 }
 
-/**
- * Shared logic to resolve the reviewer's execution configuration via ProviderRegistry.
- * Independently configurable from the auditor role (REVIEWER_PROVIDER/REVIEWER_MODEL),
- * so PR-facing review can use a different, likely stronger, model without affecting
- * the in-loop spec auditor.
- * Throws a loud error if no API key is available for the required provider.
- */
-export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
-  const reviewerConfig = DEFAULT_ROLES_CONFIG.reviewer;
-  const provider = reviewerConfig.provider;
+  /**
+   * Shared logic to resolve the reviewer's execution configuration via ProviderRegistry.
+   * Independently configurable from the reviewer role (REVIEWER_PROVIDER/REVIEWER_MODEL),
+   * so PR-facing review can use a different, likely stronger, model without affecting
+   * the in-loop spec auditor.
+   * Throws a loud error if no API key is available for the required provider.
+   */
+  export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
+    const reviewerConfig = DEFAULT_ROLES_CONFIG.reviewer;
+    const provider = reviewerConfig.provider;
 
-  let keyToUse = apiKey;
-  let envVarName = 'GEMINI_API_KEY';
+    let keyToUse = apiKey;
+    let envVarName = "GEMINI_API_KEY";
 
-  if (!keyToUse) {
-    if (provider === 'gemini') {
-      keyToUse = process.env.GEMINI_API_KEY;
-      envVarName = 'GEMINI_API_KEY';
-    } else if (provider === 'anthropic') {
-      keyToUse = process.env.ANTHROPIC_API_KEY;
-      envVarName = 'ANTHROPIC_API_KEY';
-    } else if (provider === 'openai') {
-      keyToUse = process.env.OPENAI_API_KEY;
-      envVarName = 'OPENAI_API_KEY';
+    if (!keyToUse) {
+      if (provider === "gemini") {
+        keyToUse = process.env.GEMINI_API_KEY;
+        envVarName = "GEMINI_API_KEY";
+      } else if (provider === "anthropic") {
+        keyToUse = process.env.ANTHROPIC_API_KEY;
+        envVarName = "ANTHROPIC_API_KEY";
+      } else if (provider === "openai") {
+        keyToUse = process.env.OPENAI_API_KEY;
+        envVarName = "OPENAI_API_KEY";
+      } else if (provider === "openrouter") {
+        keyToUse = process.env.OPENROUTER_API_KEY;
+        envVarName = "OPENROUTER_API_KEY";
+      }
+      if (!keyToUse && provider !== "gemini" && process.env.GEMINI_API_KEY) {
+        keyToUse = process.env.GEMINI_API_KEY;
+      }
     }
-    if (!keyToUse && provider !== 'gemini' && process.env.GEMINI_API_KEY) {
-      keyToUse = process.env.GEMINI_API_KEY;
-    }
-  }
 
-  if (!keyToUse && provider !== 'copilot-native' && provider !== 'local') {
-    throw new Error(`Missing API key for reviewer provider "${provider}". Expected ${envVarName} to be set.`);
-  }
+    if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
+      throw new Error(
+        `Missing API key for reviewer provider "${provider}". Expected ${envVarName} to be set.`,
+      );
+    }
 
   const registry = new ProviderRegistry(keyToUse);
   return registry.getExecutionConfig(reviewerConfig);

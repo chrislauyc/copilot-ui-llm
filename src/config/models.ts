@@ -9,21 +9,21 @@ export const PROVIDERS = [
 export type ProviderType = (typeof PROVIDERS)[number];
 
 export interface ModelProviderConfig {
-  provider: ProviderType;
-  model: string;
-  tokenRatio?: number;
+  readonly provider: ProviderType;
+  readonly model: string;
+  readonly tokenRatio?: number;
 }
 
 export type ModelTier = string;
 
 export interface SystemRolesConfig {
-  planner: ModelProviderConfig;
-  executorTiers: ModelProviderConfig[]; // Tiered ladder for execution
-  auditor: ModelProviderConfig;
-  reviewer: ModelProviderConfig;
+  readonly planner: ModelProviderConfig;
+  readonly executorTiers: readonly ModelProviderConfig[]; // Tiered ladder for execution
+  readonly auditor: ModelProviderConfig;
+  readonly reviewer: ModelProviderConfig;
 }
 
-export const KNOWN_MODELS_CONFIG: ModelProviderConfig[] = [
+export const KNOWN_MODELS_CONFIG: readonly ModelProviderConfig[] = [
   { provider: "gemini", model: "gemini-3.1-flash-lite", tokenRatio: 3.5 },
   { provider: "gemini", model: "gemini-3.5-flash", tokenRatio: 3.5 },
   { provider: "gemini", model: "gemini-3.1-pro-preview", tokenRatio: 3.0 },
@@ -35,6 +35,22 @@ export const KNOWN_MODELS_CONFIG: ModelProviderConfig[] = [
   { provider: "openrouter", model: "z-ai/glm-5.2", tokenRatio: 1.3 },
   { provider: "copilot-native", model: "copilot-default", tokenRatio: 1.0 },
 ];
+
+/**
+ * Look up a configured planner model in KNOWN_MODELS_CONFIG to resolve
+ * its defined tokenRatio. Returns the ratio if found, undefined otherwise.
+ */
+function resolvePlannerTokenRatio(): number | undefined {
+  const plannerModel =
+    typeof process !== "undefined"
+      ? process.env?.PLANNER_MODEL
+      : undefined;
+  if (!plannerModel) return undefined;
+  const match = KNOWN_MODELS_CONFIG.find(
+    (c) => c.model === plannerModel || plannerModel.includes(c.model),
+  );
+  return match?.tokenRatio;
+}
 
 export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
   planner: {
@@ -48,7 +64,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
     tokenRatio:
       typeof process !== "undefined" && process.env?.PLANNER_TOKEN_RATIO
         ? parseFloat(process.env.PLANNER_TOKEN_RATIO)
-        : 3.5,
+        : (resolvePlannerTokenRatio() ?? 3.5),
   },
   executorTiers: [
     {
@@ -107,7 +123,7 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
   },
 };
 
-export const MODEL_TIERS: string[] = Array.from(
+export const MODEL_TIERS: readonly string[] = Array.from(
   new Set(DEFAULT_ROLES_CONFIG.executorTiers.map((t) => t.model)),
 );
 
