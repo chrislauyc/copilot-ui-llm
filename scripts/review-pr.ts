@@ -24,14 +24,10 @@ interface CodeReviewResult {
  * runs headless in CI, so it has to stand the proxy up itself for the duration
  * of the review call.
  */
-function startProviderProxy(): Promise<Server> {
+function startProviderProxy(): Promise<Server> {  
+  process.env.COPILOT_API_URL = `http://127.0.0.1:${PORT}`;
   return new Promise((resolve, reject) => {
-    const server = app.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      const port = addr && typeof addr !== 'string' ? addr.port : 0;
-      process.env.COPILOT_API_URL = `http://127.0.0.1:${port}`;
-      resolve(server);
-    });
+    const server = app.listen(PORT, '127.0.0.1', () => resolve(server));
     server.on('error', reject);
   });
 }
