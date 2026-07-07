@@ -93,11 +93,12 @@ export class GitSandbox {
      * Safely checks out the primary base branch, falling back in order of preference.
      * Deduplicates candidates to avoid redundant CLI invocations.
      */
-    private async checkoutBaseBranch(): Promise<string> {
+    private async checkoutBaseBranch(): Promise<void> {
         const candidates = Array.from(new Set([this.baseBranch, "main", "master"]));
         for (const branch of candidates) {
             try {
-                return await this.git(["checkout", branch]);
+                await this.git(["checkout", branch]);
+                return;
             } catch (e) {
                 // Continue to fallback candidate
             }
@@ -151,6 +152,7 @@ export class GitSandbox {
             try {
                 await this.checkoutBaseBranch();
             } catch (e) {
+                console.warn(`[GitSandbox] Failed to checkout base branch:`, e);
                 // Ignore failure if we can't switch, but try to proceed
             }
 
@@ -180,7 +182,7 @@ export class GitSandbox {
         });
     }
 
-    public async parkTaskBranch(taskId: string): Promise<string> {
+    public async parkTaskBranch(taskId: string): Promise<void> {
         return this.withLock(async () => {
             // Stage and commit all current changes on the task branch
             await this.git(["add", "-A"]);
@@ -202,7 +204,7 @@ export class GitSandbox {
             }
 
             // Return to base branch
-            return await this.checkoutBaseBranch();
+            await this.checkoutBaseBranch();
         });
     }
 
@@ -276,44 +278,67 @@ export class GitSandbox {
             ]);
         }
         try {
+            this.baseBranch = await this.detectBaseBranch();
+        } catch (e) {
+            this.baseBranch = "main";
+        }
+    }
+
+    /**
+     * Attempts to dynamically detect the repository's base/default branch.
+     * Handles standard, detached HEAD, and fallback environments elegantly.
+     */
+    private async detectBaseBranch(): Promise<string> {
+        // 1. Try rev-parse on HEAD
+        try {
             const current = await this.git(["rev-parse", "--abbrev-ref", "HEAD"]);
             if (current && current !== "HEAD") {
-                this.baseBranch = current;
-            } else {
-                const fallback = await this.git(["branch", "--show-current"]);
-                if (fallback && fallback !== "HEAD") {
-                    this.baseBranch = fallback;
-                } else {
-                    // Detached HEAD state. Try to find the default branch from origin/HEAD first.
-                    try {
-                        const remoteHead = await this.git(["rev-parse", "--abbrev-ref", "origin/HEAD"]);
-                        if (remoteHead && remoteHead.startsWith("origin/")) {
-                            this.baseBranch = remoteHead.substring("origin/".length);
-                        }
-                    } catch (remoteError) {
-                        // If origin/HEAD is not available, try to resolve via name-rev as fallback
-                        try {
-                            const nameRev = await this.git(["name-rev", "--name-only", "HEAD"]);
-                            if (nameRev && !nameRev.includes("~") && !nameRev.includes("^") && nameRev !== "undefined") {
-                                let cleanName = nameRev;
-                                if (cleanName.startsWith("remotes/origin/")) {
-                                    cleanName = cleanName.substring("remotes/origin/".length);
-                                } else if (cleanName.startsWith("origin/")) {
-                                    cleanName = cleanName.substring("origin/".length);
-                                }
-                                if (cleanName && cleanName !== "HEAD") {
-                                    this.baseBranch = cleanName;
-                                }
-                            }
-                        } catch (nameRevError) {
-                            // Keep default "main"
-                        }
-                    }
+                return current;
+            }
+        } catch (e) {
+            // Proceed to fallbacks
+        }
+
+        // 2. Try show-current
+        try {
+            const fallback = await this.git(["branch", "--show-current"]);
+            if (fallback && fallback !== "HEAD") {
+                return fallback;
+            }
+        } catch (e) {
+            // Proceed to fallbacks
+        }
+
+        // 3. Detached HEAD fallbacks:
+        // A. Try to read origin/HEAD
+        try {
+            const remoteHead = await this.git(["rev-parse", "--abbrev-ref", "origin/HEAD"]);
+            if (remoteHead && remoteHead.startsWith("origin/")) {
+                return remoteHead.substring("origin/".length);
+            }
+        } catch (e) {
+            // Proceed to next fallback
+        }
+
+        // B. Try name-rev on HEAD
+        try {
+            const nameRev = await this.git(["name-rev", "--name-only", "HEAD"]);
+            if (nameRev && !nameRev.includes("~") && !nameRev.includes("^") && nameRev !== "undefined") {
+                let cleanName = nameRev;
+                if (cleanName.startsWith("remotes/origin/")) {
+                    cleanName = cleanName.substring("remotes/origin/".length);
+                } else if (cleanName.startsWith("origin/")) {
+                    cleanName = cleanName.substring("origin/".length);
+                }
+                if (cleanName && cleanName !== "HEAD") {
+                    return cleanName;
                 }
             }
         } catch (e) {
-            // Keep default "main" if Git commands fail
+            // Keep default fallback
         }
+
+        return "main";
     }
 
     /**
