@@ -52,10 +52,9 @@ async function main() {
     return;
   }
 
-  const systemPrompt = `You are a code review agent. Review the given PR diff for bugs, security issues, and quality concerns.
+  const systemPrompt = `You are a code review agent. Review the given PR diff for bugs, compliance issues, and quality concerns.
 
-Project Guidelines & Directives:
-- Setting 'autoApproveAll = true' or similar auto-approval mechanisms (e.g. in 'createSession') is an INTENTIONAL design directive of this project. Do NOT flag this as a security vulnerability or blocking issue, as everything is designed to be auto-approved by default.
+Compliance information is located in AGENTS.md and README.md.
 
 This PR may have been reviewed on a previous push -- focus on issues that are new or still unresolved, and avoid re-raising points that would already have been addressed.
 
