@@ -62,73 +62,81 @@ function resolvePlannerTokenRatio(): number | undefined {
 }
 
 export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
-  planner: {
-    provider:
-      (typeof process !== "undefined" &&
-        (isProviderType(process.env?.PLANNER_PROVIDER) ? process.env?.PLANNER_PROVIDER : undefined)) ||
-      "gemini",
-    model:
-      (typeof process !== "undefined" && process.env?.PLANNER_MODEL) ||
-      "gemini-3.1-flash-lite",
-    tokenRatio:
-      typeof process !== "undefined" && process.env?.PLANNER_TOKEN_RATIO
-        ? parseFloat(process.env.PLANNER_TOKEN_RATIO)
-        : (resolvePlannerTokenRatio() ?? 3.5),
-  },
-  executorTiers: [
-    {
+  get planner() {
+    return {
       provider:
         (typeof process !== "undefined" &&
-          (isProviderType(process.env?.EXECUTOR_TIER_0_PROVIDER) ? process.env?.EXECUTOR_TIER_0_PROVIDER : undefined)) ||
+          (isProviderType(process.env?.PLANNER_PROVIDER) ? process.env?.PLANNER_PROVIDER : undefined)) ||
         "gemini",
       model:
+        (typeof process !== "undefined" && process.env?.PLANNER_MODEL) ||
+        "gemini-3.1-flash-lite",
+      tokenRatio:
+        typeof process !== "undefined" && process.env?.PLANNER_TOKEN_RATIO
+          ? parseFloat(process.env.PLANNER_TOKEN_RATIO)
+          : (resolvePlannerTokenRatio() ?? 3.5),
+    };
+  },
+  get executorTiers() {
+    return [
+      {
+        provider:
+          (typeof process !== "undefined" &&
+            (isProviderType(process.env?.EXECUTOR_TIER_0_PROVIDER) ? process.env?.EXECUTOR_TIER_0_PROVIDER : undefined)) ||
+          "gemini",
+        model:
+          (typeof process !== "undefined" &&
+            process.env?.EXECUTOR_TIER_0_MODEL) ||
+          "gemini-3.1-flash-lite",
+        tokenRatio: 3.5,
+      },
+      {
+        provider:
+          (typeof process !== "undefined" &&
+            (isProviderType(process.env?.EXECUTOR_TIER_1_PROVIDER) ? process.env?.EXECUTOR_TIER_1_PROVIDER : undefined)) ||
+          "gemini",
+        model:
+          (typeof process !== "undefined" &&
+            process.env?.EXECUTOR_TIER_1_MODEL) ||
+          "gemini-3.5-flash",
+        tokenRatio: 3.5,
+      },
+      {
+        provider:
+          (typeof process !== "undefined" &&
+            (isProviderType(process.env?.EXECUTOR_TIER_2_PROVIDER) ? process.env?.EXECUTOR_TIER_2_PROVIDER : undefined)) ||
+          "gemini",
+        model:
+          (typeof process !== "undefined" &&
+            process.env?.EXECUTOR_TIER_2_MODEL) ||
+          "gemini-3.1-pro-preview",
+        tokenRatio: 3.0,
+      },
+    ];
+  },
+  get auditor() {
+    return {
+      provider:
         (typeof process !== "undefined" &&
-          process.env?.EXECUTOR_TIER_0_MODEL) ||
+          (isProviderType(process.env?.AUDITOR_PROVIDER) ? process.env?.AUDITOR_PROVIDER : undefined)) ||
+        "gemini",
+      model:
+        (typeof process !== "undefined" && process.env?.AUDITOR_MODEL) ||
         "gemini-3.1-flash-lite",
       tokenRatio: 3.5,
-    },
-    {
+    };
+  },
+  get reviewer() {
+    return {
       provider:
         (typeof process !== "undefined" &&
-          (isProviderType(process.env?.EXECUTOR_TIER_1_PROVIDER) ? process.env?.EXECUTOR_TIER_1_PROVIDER : undefined)) ||
+          (isProviderType(process.env?.REVIEWER_PROVIDER) ? process.env?.REVIEWER_PROVIDER : undefined)) ||
         "gemini",
       model:
-        (typeof process !== "undefined" &&
-          process.env?.EXECUTOR_TIER_1_MODEL) ||
-        "gemini-3.5-flash",
-      tokenRatio: 3.5,
-    },
-    {
-      provider:
-        (typeof process !== "undefined" &&
-          (isProviderType(process.env?.EXECUTOR_TIER_2_PROVIDER) ? process.env?.EXECUTOR_TIER_2_PROVIDER : undefined)) ||
-        "gemini",
-      model:
-        (typeof process !== "undefined" &&
-          process.env?.EXECUTOR_TIER_2_MODEL) ||
+        (typeof process !== "undefined" && process.env?.REVIEWER_MODEL) ||
         "gemini-3.1-pro-preview",
       tokenRatio: 3.0,
-    },
-  ],
-  auditor: {
-    provider:
-      (typeof process !== "undefined" &&
-        (isProviderType(process.env?.AUDITOR_PROVIDER) ? process.env?.AUDITOR_PROVIDER : undefined)) ||
-      "gemini",
-    model:
-      (typeof process !== "undefined" && process.env?.AUDITOR_MODEL) ||
-      "gemini-3.1-flash-lite",
-    tokenRatio: 3.5,
-  },
-  reviewer: {
-    provider:
-      (typeof process !== "undefined" &&
-        (isProviderType(process.env?.REVIEWER_PROVIDER) ? process.env?.REVIEWER_PROVIDER : undefined)) ||
-      "gemini",
-    model:
-      (typeof process !== "undefined" && process.env?.REVIEWER_MODEL) ||
-      "gemini-3.1-pro-preview",
-    tokenRatio: 3.0,
+    };
   },
 };
 

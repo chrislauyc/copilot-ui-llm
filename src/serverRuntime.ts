@@ -594,7 +594,6 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
 
       const registryInstance = new ProviderRegistry(keyToUse);
-      const executionConfig = registryInstance.getExecutionConfig(activeModel);
 
       const requiresKey =
         activeProviderType !== "copilot-native" &&
@@ -608,6 +607,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         });
         return;
       }
+
+      const executionConfig = registryInstance.getExecutionConfig(activeModel);
 
       const outputLines: string[] = [];
       const addLine = (msg: string) => {
@@ -980,7 +981,6 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       );
 
       const registryInstance = new ProviderRegistry(keyToUse);
-      const executionConfig = registryInstance.getExecutionConfig(targetModel);
 
       const requiresKey =
         activeProviderType !== "copilot-native" &&
@@ -993,6 +993,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         );
         return;
       }
+
+      const executionConfig = registryInstance.getExecutionConfig(targetModel);
 
       const promptStr = prompt as string;
       if (!promptStr || promptStr.trim() === '') {

@@ -113,7 +113,7 @@ export class ProviderRegistry {
       }
       return {
         type: 'openai',
-        baseUrl: process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/gemini/v1beta/openai/` : `http://127.0.0.1:${process.env.PORT || 3000}/api/providers/gemini/v1beta/openai/`,
+        baseUrl: process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/gemini/v1beta/openai/` : `http://localhost:${process.env.PORT || 3000}/api/providers/gemini/v1beta/openai/`,
         apiKey: this.apiKey
       };
     } else if (provider === 'anthropic') {
@@ -140,7 +140,7 @@ export class ProviderRegistry {
       }
 
 
-      const proxyBaseUrl = process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/openrouter/api/v1/` : `http://127.0.0.1:${process.env.PORT || 3000}/api/providers/openrouter/api/v1/`;
+      const proxyBaseUrl = process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/openrouter/api/v1/` : `http://localhost:${process.env.PORT || 3000}/api/providers/openrouter/api/v1/`;
       let finalBaseUrl = process.env.OPENROUTER_BASE_URL || proxyBaseUrl;
       if (finalBaseUrl) {
         finalBaseUrl = finalBaseUrl.trim();
