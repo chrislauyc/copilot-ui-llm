@@ -207,28 +207,38 @@ async function main() {
     sessionId ? `<sub>session_id: \`${sessionId}\`</sub>` : '',
   ].filter(Boolean).join('\n\n');
 
-  // Carry forward blocking findings across runs. The model can only confirm
-  // resolution for findings it was actually shown -- and even then, only for
-  // files that were part of the reviewed diff. A prior finding that the model
-  // doesn't mention at all (e.g. it lives in a file untouched by this round's
-  // incremental diff) must NOT be silently dropped; it should still be
-  // considered open until something explicitly reports it 'resolved'.
-  const findingKey = (f: { file: string; line?: number }) => `${f.file}:${f.line ?? ''}`;
-
-  const priorFindingsByKey = new Map<string, PersistedBlockingFinding>(
-    (previousState?.blockingFindings || []).map((f) => [findingKey(f), f]),
-  );
+  // Carry forward blocking findings across runs -- but only in incremental
+  // mode. In full-review mode (fallback due to force-push/rebase/shallow
+  // clone, or no prior state), the model reviewed the ENTIRE diff and was not
+  // shown the prior findings list at all (see buildSystemPrompt/buildUserPrompt),
+  // so it has no way to mark anything 'resolved'. Treating its full-review
+  // output as authoritative and NOT seeding from previousState avoids stale
+  // findings persisting forever after every force-push. In incremental mode,
+  // the model only sees new changes, so a prior finding it doesn't mention at
+  // all (e.g. it lives in a file untouched by this round's diff) must NOT be
+  // silently dropped -- it should still be considered open until something
+  // explicitly reports it 'resolved'.
+  //
+  // Keyed on file path alone (not file:line) so that a finding whose line
+  // shifts between rounds due to unrelated edits above it still matches and
+  // gets updated/resolved, rather than producing a duplicate entry. The
+  // tradeoff is coarser dedup: two distinct blocking findings in the same
+  // file would collapse to one carried entry, which is a much smaller risk
+  // than silently duplicating findings forever.
+  const findingKey = (f: { file: string }) => f.file;
 
   const carriedForward = new Map<string, PersistedBlockingFinding>();
 
-  // Start from every prior still-open finding -- assume still open by default.
-  for (const [key, finding] of priorFindingsByKey) {
-    carriedForward.set(key, finding);
+  if (incremental) {
+    for (const f of previousState?.blockingFindings || []) {
+      carriedForward.set(findingKey(f), f);
+    }
   }
 
   // Now apply what the model actually reported this round: 'resolved' removes
-  // it, 'still-open' refreshes it (message/line may have shifted), and a fresh
-  // blocking finding with no status is a genuinely new one to add.
+  // it, 'still-open' refreshes it, and a fresh blocking finding with no status
+  // (either a genuinely new incremental finding, or any finding at all in
+  // full-review mode) is added/kept as-is.
   for (const f of blockingFindings) {
     const key = findingKey(f);
     if (f.status === 'resolved') {
