@@ -356,6 +356,32 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     next();
   });
 
+/**
+ * Session id to stamp onto outgoing OpenRouter request bodies as "session_id",
+ * so requests from a given copilot-sdk session are grouped together in
+ * OpenRouter's dashboard/logs. Set by the caller (e.g. review-pr.ts) right
+ * after a CopilotSession is created, before any prompt is sent.
+ *
+ * NOTE: this is a single module-level value, not per-request. That's fine for
+ * a short-lived, single-session process like review-pr.ts (which starts its
+ * own dedicated instance of this proxy), but it is NOT safe if this server is
+ * ever handling multiple concurrent copilot-sdk sessions at once (e.g. the
+ * main long-running app) -- concurrent sessions would stamp each other's
+ * requests with the wrong session_id. The SDK does not currently send any
+ * per-request session identifier we could forward instead, so a real fix for
+ * the concurrent case would need to come from there.
+ *
+ * TODO: not safe for concurrent multi-session use of this server (e.g. the
+ * main long-running app). Before reusing this proxy for anything beyond a
+ * single-session process like review-pr.ts, either scope this per-request
+ * (e.g. via a header/query param carrying the session id, once the SDK
+ * supports emitting one) or otherwise stop relying on shared module state.
+ */
+let activeOpenRouterSessionId: string | undefined;
+export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
+  activeOpenRouterSessionId = sessionId;
+}
+
   // Generic adapter registry route for model providers (SYS-REQ-004 & SYS-REQ-005)
   app.all('/api/providers/:provider/*', (req, res) => {
     let bodyData = '';
@@ -387,6 +413,17 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         targetHostname = 'api.anthropic.com';
       } else if (provider === 'openrouter') {
         targetHostname = 'openrouter.ai';
+        try {
+          if (bodyData && activeOpenRouterSessionId) {
+            const data = JSON.parse(bodyData);
+            if (data && typeof data === 'object' && !data.session_id) {
+              data.session_id = activeOpenRouterSessionId;
+              modifiedBody = JSON.stringify(data);
+            }
+          }
+        } catch (e) {
+          writeLog("Provider parse error (openrouter session_id): " + e);
+        }
       }
 
       const headers: Record<string, string | string[] | undefined> = { ...req.headers, host: targetHostname };
