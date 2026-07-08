@@ -89,15 +89,6 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
     }
   }
 
-  if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
-    throw new Error(
-      `Missing API key for reviewer provider "${provider}". Expected ${envVarName} to be set.`,
-    );
-  }
-
-  }
-
-  }
 
   if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
     throw new Error(
