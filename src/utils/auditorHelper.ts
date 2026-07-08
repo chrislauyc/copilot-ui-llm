@@ -46,11 +46,6 @@ export function getAuditorExecutionConfig(apiKey?: string): ExecutionConfig {
       keyToUse = process.env.OPENROUTER_API_KEY;
       envVarName = "OPENROUTER_API_KEY";
     }
-
-    // Fallback to GEMINI_API_KEY if specific one is missing, as many setups route through it
-    if (!keyToUse && provider !== "gemini" && process.env.GEMINI_API_KEY) {
-      keyToUse = process.env.GEMINI_API_KEY;
-    }
   }
 
   if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
@@ -66,7 +61,8 @@ export function getAuditorExecutionConfig(apiKey?: string): ExecutionConfig {
 /**
  * Shared logic to resolve the reviewer's execution configuration via ProviderRegistry.
  * Independently configurable from the auditor role (REVIEWER_PROVIDER/REVIEWER_MODEL),
- * so PR-facing review can use a different, likely stronger, model without affecting * the in-loop spec auditor.
+ * so PR-facing review can use a different, likely stronger, model without affecting
+ * the in-loop spec auditor.
  * Throws a loud error if no API key is available for the required provider.
  */
 export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
@@ -89,11 +85,6 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
     } else if (provider === "openrouter") {
       keyToUse = process.env.OPENROUTER_API_KEY;
       envVarName = "OPENROUTER_API_KEY";
-    }
-
-    // Fallback to GEMINI_API_KEY if specific one is missing, as many setups route through it
-    if (!keyToUse && provider !== "gemini" && process.env.GEMINI_API_KEY) {
-      keyToUse = process.env.GEMINI_API_KEY;
     }
   }
 
@@ -163,7 +154,8 @@ export async function executeAuditSession<T>(
   userPrompt: string,
   responseRequirements: ResponseRequirement,
   abortSignal?: AbortSignal,
-  timeoutMs: number = 300000): Promise<T | null> {
+  timeoutMs: number = 300000,
+  onSessionId?: (sessionId: string) => void): Promise<T | null> {
   const client = new CopilotClient({
     workingDirectory,
     logLevel: 'none',
@@ -183,6 +175,8 @@ export async function executeAuditSession<T>(
     );
     console.log('[executeAuditSession] creating session...');
     const session = await client.createSession(sessionSettings as any);
+    console.log(`[executeAuditSession] session created: ${session.sessionId}`);
+    onSessionId?.(session.sessionId);
     console.log('[executeAuditSession] sending and waiting for response...');
     if (abortSignal) {
       await Promise.race([
