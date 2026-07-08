@@ -104,7 +104,7 @@ function buildSystemPrompt(incremental: boolean): string {
 Compliance information is located in AGENTS.md and README.md.
 
 ${incremental
-    ? `The PR DIFF below only covers changes since the last review round. A list of previously reported blocking findings is included -- for each one, check whether it is now resolved, still open, or (if it no longer applies at all) drop it. Only set the 'status' field on findings that correspond to one of these prior items. Do not re-raise a previously reported blocking finding as a new finding; instead report it once with the appropriate status.`
+    ? `The PR DIFF below only covers changes since the last review round. A list of previously reported blocking findings is included -- for each one, check whether it is now resolved, still open[...]
     : `This is a full review of the entire PR diff (no prior review state was found, or it could not be used). Do not set the 'status' field on any findings.`}
 
 Suggestions and nits are not tracked across review rounds -- just report whatever you currently observe, with no 'status' field.
@@ -219,13 +219,12 @@ async function main() {
   // silently dropped -- it should still be considered open until something
   // explicitly reports it 'resolved'.
   //
-  // Keyed on file path alone (not file:line) so that a finding whose line
-  // shifts between rounds due to unrelated edits above it still matches and
-  // gets updated/resolved, rather than producing a duplicate entry. The
-  // tradeoff is coarser dedup: two distinct blocking findings in the same
-  // file would collapse to one carried entry, which is a much smaller risk
-  // than silently duplicating findings forever.
-  const findingKey = (f: { file: string }) => f.file;
+  // Keyed on file:line (or file alone if line is undefined) to distinguish
+  // multiple findings in the same file and prevent data loss. A prior finding
+  // that is not re-reported this round is preserved as-is, ensuring no blocking
+  // issue is silently dropped unless explicitly marked 'resolved' by the model.
+  const findingKey = (f: { file: string; line?: number }) => 
+    f.line !== undefined ? `${f.file}:${f.line}` : f.file;
 
   const carriedForward = new Map<string, PersistedBlockingFinding>();
 
@@ -238,7 +237,8 @@ async function main() {
   // Now apply what the model actually reported this round: 'resolved' removes
   // it, 'still-open' refreshes it, and a fresh blocking finding with no status
   // (either a genuinely new incremental finding, or any finding at all in
-  // full-review mode) is added/kept as-is.
+  // full-review mode) is added/kept as-is. Prior findings not mentioned in this
+  // round remain in carriedForward unchanged.
   for (const f of blockingFindings) {
     const key = findingKey(f);
     if (f.status === 'resolved') {
