@@ -8,13 +8,14 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
 }
 import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
-import { app } from '../src/serverRuntime';
+import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper';
 import { submitCodeReviewTool } from '../src/config/tools';
 import { getFilteredDiff } from './diffFilter';
 import {
   loadPreviousReviewState,
   isCommitReachable,
+  isAncestor,
   renderStateMarker,
   type ReviewState,
   type PersistedBlockingFinding,
@@ -58,9 +59,16 @@ function stopProviderProxy(server: Server): Promise<void> {
  * last-reviewed sha (cheaper, and lets the model focus on what's actually new)
  * but falls back to the full base...head diff whenever that isn't possible or
  * safe: no prior state, the prior sha is unreachable (force-push/rebase, or a
- * shallow checkout that never had it), or it's identical to the current head
- * (nothing new to review incrementally, though we still may want to bail out
- * entirely -- handled by the caller).
+ * shallow checkout that never had it), it's not actually an ancestor of head
+ * (e.g. rebase that dropped it from history but left the commit object
+ * dangling locally), or it's identical to the current head (nothing new to
+ * review incrementally, though we still may want to bail out entirely --
+ * handled by the caller).
+ *
+ * Uses double-dot (`a..b`) rather than triple-dot for the incremental range:
+ * triple-dot diffs against the merge-base of the two commits, which is only
+ * equivalent to "changes since a" when a is a strict ancestor of b -- exactly
+ * the case we've already verified via isAncestor by this point.
  */
 function resolveDiffRange(
   baseSha: string,
@@ -80,7 +88,14 @@ function resolveDiffRange(
     );
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
-  return { range: `${previousState.lastReviewedSha}...${headSha}`, incremental: true };
+  if (!isAncestor(previousState.lastReviewedSha, headSha)) {
+    console.warn(
+      `[review-pr] previously-reviewed sha ${previousState.lastReviewedSha} is not an ancestor of ${headSha} ` +
+      `(likely a rebase/force-push rewrote history) -- falling back to a full review.`,
+    );
+    return { range: `${baseSha}...${headSha}`, incremental: false };
+  }
+  return { range: `${previousState.lastReviewedSha}..${headSha}`, incremental: true };
 }
 
 function buildSystemPrompt(incremental: boolean): string {
@@ -132,6 +147,7 @@ async function main() {
   const executionConfig = getReviewerExecutionConfig();
   const proxyServer = await startProviderProxy();
   let result: CodeReviewResult | null;
+  let sessionId: string | undefined;
 
   try {
     result = await executeAuditSession<CodeReviewResult>(
@@ -145,10 +161,23 @@ async function main() {
         allowOthers: false
       },
       undefined,
-      600000
+      600000,
+      (id) => {
+        sessionId = id;
+        setActiveOpenRouterSessionId(id);
+      },
     );
   } finally {
+    setActiveOpenRouterSessionId(undefined);
     await stopProviderProxy(proxyServer);
+  }
+
+  if (sessionId) {
+    console.log(`[review-pr] reviewer session_id: ${sessionId}`);
+  } else {
+    // Session was never created (e.g. client.start()/createSession() threw before
+    // the callback fired) -- still worth knowing when correlating a failed run.
+    console.warn('[review-pr] no session_id was captured for this run.');
   }
 
   if (!result) {
@@ -175,19 +204,46 @@ async function main() {
     section('Blocking', blockingFindings),
     section('Suggestions', bySeverity('suggestion')),
     section('Nits', bySeverity('nit')),
+    sessionId ? `<sub>session_id: \`${sessionId}\`</sub>` : '',
   ].filter(Boolean).join('\n\n');
 
-  // Only carry forward blocking findings that are still open (drop anything
-  // the model marked 'resolved', and drop suggestions/nits entirely -- see
-  // discussion: cross-run memory is only worth the token/complexity cost for
-  // gating issues, not opt-in ones).
-  const stillOpenBlocking: PersistedBlockingFinding[] = blockingFindings
-    .filter((f) => f.status !== 'resolved')
-    .map((f) => ({ file: f.file, line: f.line, message: f.message }));
+  // Carry forward blocking findings across runs. The model can only confirm
+  // resolution for findings it was actually shown -- and even then, only for
+  // files that were part of the reviewed diff. A prior finding that the model
+  // doesn't mention at all (e.g. it lives in a file untouched by this round's
+  // incremental diff) must NOT be silently dropped; it should still be
+  // considered open until something explicitly reports it 'resolved'.
+  const findingKey = (f: { file: string; line?: number }) => `${f.file}:${f.line ?? ''}`;
+
+  const priorFindingsByKey = new Map<string, PersistedBlockingFinding>(
+    (previousState?.blockingFindings || []).map((f) => [findingKey(f), f]),
+  );
+
+  const carriedForward = new Map<string, PersistedBlockingFinding>();
+
+  // Start from every prior still-open finding -- assume still open by default.
+  for (const [key, finding] of priorFindingsByKey) {
+    carriedForward.set(key, finding);
+  }
+
+  // Now apply what the model actually reported this round: 'resolved' removes
+  // it, 'still-open' refreshes it (message/line may have shifted), and a fresh
+  // blocking finding with no status is a genuinely new one to add.
+  for (const f of blockingFindings) {
+    const key = findingKey(f);
+    if (f.status === 'resolved') {
+      carriedForward.delete(key);
+    } else {
+      carriedForward.set(key, { file: f.file, line: f.line, message: f.message });
+    }
+  }
+
+  const stillOpenBlocking: PersistedBlockingFinding[] = Array.from(carriedForward.values());
 
   const newState: ReviewState = {
     lastReviewedSha: headSha,
     blockingFindings: stillOpenBlocking,
+    session_id: sessionId,
   };
   const bodyWithState = `${body}\n\n${renderStateMarker(newState)}`;
 
