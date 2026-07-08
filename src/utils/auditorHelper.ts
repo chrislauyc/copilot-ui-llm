@@ -87,6 +87,13 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
       keyToUse = process.env.OPENROUTER_API_KEY;
       envVarName = "OPENROUTER_API_KEY";
     }
+  }
+
+  if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
+    throw new Error(
+      `Missing API key for reviewer provider "${provider}". Expected ${envVarName} to be set.`,
+    );
+  }
 
   }
 
