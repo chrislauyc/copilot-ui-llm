@@ -19,6 +19,8 @@ export interface PersistedBlockingFinding {
 export interface ReviewState {
   lastReviewedSha: string;
   blockingFindings: PersistedBlockingFinding[];
+  /** copilot-sdk session id for the run that produced this state, for correlating with logs. */
+  session_id?: string;
 }
 
 interface GhComment {
@@ -71,12 +73,18 @@ function parseStateMarker(body: string): ReviewState | null {
   const endIdx = body.indexOf(STATE_MARKER_END, startIdx);
   if (endIdx === -1) return null;
 
-  const jsonText = body.slice(startIdx + STATE_MARKER_START.length, endIdx).trim();
+  // Payload is base64-encoded (see renderStateMarker) specifically so that
+  // arbitrary finding text -- which could itself contain "-->" -- can't
+  // terminate the HTML comment early and corrupt both the visible comment
+  // and the parse.
+  const encoded = body.slice(startIdx + STATE_MARKER_START.length, endIdx).trim();
   try {
+    const jsonText = Buffer.from(encoded, 'base64').toString('utf-8');
     const parsed = JSON.parse(jsonText);
     if (
       typeof parsed?.lastReviewedSha !== 'string' ||
-      !Array.isArray(parsed?.blockingFindings)
+      !Array.isArray(parsed?.blockingFindings) ||
+      (parsed?.session_id !== undefined && typeof parsed.session_id !== 'string')
     ) {
       return null;
     }
@@ -89,7 +97,8 @@ function parseStateMarker(body: string): ReviewState | null {
 
 /** Renders the hidden state block to append to the bottom of a new PR comment. */
 export function renderStateMarker(state: ReviewState): string {
-  return `${STATE_MARKER_START}\n${JSON.stringify(state)}\n${STATE_MARKER_END}`;
+  const encoded = Buffer.from(JSON.stringify(state), 'utf-8').toString('base64');
+  return `${STATE_MARKER_START}\n${encoded}\n${STATE_MARKER_END}`;
 }
 
 /**
@@ -100,6 +109,23 @@ export function renderStateMarker(state: ReviewState): string {
 export function isCommitReachable(sha: string): boolean {
   try {
     execFileSync('git', ['cat-file', '-e', `${sha}^{commit}`], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Checks whether `ancestorSha` is an ancestor of `descendantSha` (or the same
+ * commit). This matters because a two-dot diff (`a..b`) only produces "exactly
+ * what changed since a" when a is genuinely on b's history -- e.g. after a
+ * rebase, the old commit object can still exist locally (isCommitReachable
+ * would say yes) while no longer being an ancestor of the new head, in which
+ * case incremental review should not be trusted.
+ */
+export function isAncestor(ancestorSha: string, descendantSha: string): boolean {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', ancestorSha, descendantSha], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
