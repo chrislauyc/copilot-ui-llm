@@ -104,7 +104,7 @@ function buildSystemPrompt(incremental: boolean): string {
 Compliance information is located in AGENTS.md and README.md.
 
 ${incremental
-    ? `The PR DIFF below only covers changes since the last review round. A list of previously reported blocking findings is included -- for each one, check whether it is now resolved, still open[...]
+    ? `The PR DIFF below only covers changes since the last review round. A list of previously reported blocking findings is included -- for each one, check whether it is now resolved, still open, or (if it no longer applies at all) drop it. Only set the 'status' field on findings that correspond to one of these prior items. Do not re-raise a previously reported blocking finding as a new finding; instead report it once with the appropriate status.`
     : `This is a full review of the entire PR diff (no prior review state was found, or it could not be used). Do not set the 'status' field on any findings.`}
 
 Suggestions and nits are not tracked across review rounds -- just report whatever you currently observe, with no 'status' field.
