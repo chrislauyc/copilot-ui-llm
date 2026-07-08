@@ -1,3 +1,11 @@
+// check for openrouter models first before falling back to gemini
+if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
+  if (process.env.REVIEWER_MODEL.includes('/')) {
+    process.env.REVIEWER_PROVIDER = 'openrouter';
+  } else {
+    process.env.REVIEWER_PROVIDER = 'gemini';
+  }
+}
 import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
 import { app } from '../src/serverRuntime';

@@ -239,17 +239,17 @@ function resolveProviderSpecificKey(providerType: ProviderType): string | undefi
     case "gemini":
       return process.env.GEMINI_API_KEY;
     case "openai":
-      return process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY;
+      return process.env.OPENAI_API_KEY;
     case "anthropic":
-      return process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
+      return process.env.ANTHROPIC_API_KEY;
     case "openrouter":
-      return process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
+      return process.env.OPENROUTER_API_KEY;
     case "copilot-native":
     case "local":
       return undefined;
     default: {
       const _exhaustiveCheck: never = providerType;
-      return process.env.GEMINI_API_KEY;
+      return undefined;
     }
   }
 }
@@ -385,9 +385,25 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         }
       } else if (provider === 'anthropic') {
         targetHostname = 'api.anthropic.com';
+      } else if (provider === 'openrouter') {
+        targetHostname = 'openrouter.ai';
       }
 
-      const headers = { ...req.headers, host: targetHostname };
+      const headers: Record<string, string | string[] | undefined> = { ...req.headers, host: targetHostname };
+      if (provider === 'openrouter') {
+        if (!headers.authorization) {
+          const key = process.env.OPENROUTER_API_KEY;
+          if (key) {
+            headers.authorization = `Bearer ${key}`;
+          }
+        }
+        if (!headers['http-referer']) {
+          headers['http-referer'] = 'https://github.com/github/copilot';
+        }
+        if (!headers['x-openrouter-title']) {
+          headers['x-openrouter-title'] = 'GitHub Copilot';
+        }
+      }
       delete headers['accept-encoding'];
       headers['content-length'] = Buffer.byteLength(modifiedBody).toString();
 
@@ -570,10 +586,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       // Resolve the provider first to determine which env var to check for the key
       const detectionInstance = new ProviderRegistry(undefined);
-      const detectionConfig = detectionInstance.getExecutionConfig(activeModel);
-      const activeProviderType = detectionConfig.providerType;
+      const activeProviderType = detectionInstance.getProviderType(activeModel);
 
-      // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
+      // Map the active provider to its specific env var
       const providerSpecificKey =
         resolveProviderSpecificKey(activeProviderType);
       const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
@@ -944,10 +959,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       // Resolve the provider first to determine which env var to check for the key
       const detectionInstance = new ProviderRegistry(undefined);
-      const detectionConfig = detectionInstance.getExecutionConfig(targetModel);
-      const activeProviderType = detectionConfig.providerType;
+      const activeProviderType = detectionInstance.getProviderType(targetModel);
 
-      // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
+      // Map the active provider to its specific env var
       const providerSpecificKey =
         resolveProviderSpecificKey(activeProviderType);
       const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;

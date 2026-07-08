@@ -30,6 +30,11 @@ export class ProviderRegistry {
       return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
     }
     const cleaned = modelName.replace('models/', '').trim();
+    // Return custom provider-namespaced paths early (e.g. openrouter paths) to avoid incorrect partial matching/collapsing
+    if (cleaned.includes('/')) {
+      return cleaned;
+    }
+
     // Prefer exact matches then longest partial match to avoid substring collisions (e.g. gpt-4o vs gpt-4o-mini)
     const exact = MODEL_TIERS.find(m => m === cleaned);
     if (exact) return exact;
@@ -48,6 +53,40 @@ export class ProviderRegistry {
     }
 
     return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
+  }
+
+  /**
+   * Resolves the provider type for a given model or config, without retrieving or validating API keys.
+   */
+  public getProviderType(input: string | ModelProviderConfig): ProviderType {
+    if (typeof input === 'object' && input !== null) {
+      return input.provider;
+    }
+    const model = this.getMappedModel(input as string);
+    const allConfigs = [
+      DEFAULT_ROLES_CONFIG.planner,
+      DEFAULT_ROLES_CONFIG.auditor,
+      ...DEFAULT_ROLES_CONFIG.executorTiers,
+      ...KNOWN_MODELS_CONFIG
+    ];
+
+    let matchedConfig = allConfigs.find(t => t.model === model);
+
+    if (!matchedConfig) {
+      const candidates = allConfigs.filter(t => model.includes(t.model) || t.model.includes(model));
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.model.length - a.model.length);
+        matchedConfig = candidates[0];
+      }
+    }
+
+    if (matchedConfig) {
+      return matchedConfig.provider;
+    } else if (model.includes('/')) {
+      return 'openrouter';
+    } else {
+      return 'gemini';
+    }
   }
 
   /**
@@ -80,7 +119,7 @@ export class ProviderRegistry {
     } else if (provider === 'anthropic') {
       const apiKey = process.env.ANTHROPIC_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined);
       if (!apiKey) {
-        throw new Error('Missing API key for Anthropic provider. Expected ANTHROPIC_API_KEY or GEMINI_API_KEY (fallback) to be set.');
+        throw new Error('Missing API key for Anthropic provider. Expected ANTHROPIC_API_KEY to be set.');
       }
       return {
         type: 'anthropic',
@@ -94,15 +133,27 @@ export class ProviderRegistry {
         apiKey: process.env.LOCAL_PROVIDER_API_KEY || 'ollama'
       };
     } else if (provider === 'openrouter') {
-      // Support OpenRouter API key env var with GEMINI_API_KEY fallback for convenience in some deployments
-      const apiKey = process.env.OPENROUTER_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined) || process.env.GEMINI_API_KEY;
+      // Support OpenRouter API key env var without GEMINI_API_KEY fallback to avoid silent failure
+      const apiKey = process.env.OPENROUTER_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined);
       if (!apiKey) {
-        throw new Error('Missing API key for OpenRouter provider. Expected OPENROUTER_API_KEY or GEMINI_API_KEY (fallback) to be set.');
+        throw new Error('Missing API key for OpenRouter provider. Expected OPENROUTER_API_KEY to be set.');
+      }
+
+
+      const proxyBaseUrl = process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/openrouter/api/v1/` : `http://127.0.0.1:${process.env.PORT || 3000}/api/providers/openrouter/api/v1/`;
+      let finalBaseUrl = process.env.OPENROUTER_BASE_URL || proxyBaseUrl;
+      if (finalBaseUrl) {
+        finalBaseUrl = finalBaseUrl.trim();
+        finalBaseUrl = finalBaseUrl.replace(/\/chat\/completions\/?$/, '/');
+        finalBaseUrl = finalBaseUrl.replace(/\/completions\/?$/, '/');
+        if (!finalBaseUrl.endsWith('/')) {
+          finalBaseUrl += '/';
+        }
       }
       return {
         type: 'openai',
         // default known endpoint for OpenRouter; allow override via OPENROUTER_BASE_URL if needed
-        baseUrl: process.env.OPENROUTER_BASE_URL || 'https://api.openrouter.ai/v1/',
+        baseUrl: finalBaseUrl,
         apiKey
       };
     } else if (provider === 'openai') {
@@ -115,7 +166,7 @@ export class ProviderRegistry {
       }
       const apiKey = process.env.OPENAI_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined);
       if (!apiKey) {
-        throw new Error('Missing API key for OpenAI provider. Expected OPENAI_API_KEY or GEMINI_API_KEY (fallback) to be set.');
+        throw new Error('Missing API key for OpenAI provider. Expected OPENAI_API_KEY to be set.');
       }
       return {
         type: 'openai',
@@ -164,6 +215,8 @@ export class ProviderRegistry {
 
       if (matchedConfig) {
         providerType = matchedConfig.provider;
+      } else if (model.includes('/')) {
+        providerType = 'openrouter';
       } else {
         providerType = 'gemini';
       }
