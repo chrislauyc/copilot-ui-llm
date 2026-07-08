@@ -47,6 +47,10 @@ export class ProviderRegistry {
       return DEFAULT_ROLES_CONFIG.auditor.model;
     }
 
+    if (cleaned.includes('/')) {
+      return cleaned;
+    }
+
     return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
   }
 
@@ -178,6 +182,8 @@ export class ProviderRegistry {
 
       if (matchedConfig) {
         providerType = matchedConfig.provider;
+      } else if (model.includes('/')) {
+        providerType = 'openrouter';
       } else {
         providerType = 'gemini';
       }
