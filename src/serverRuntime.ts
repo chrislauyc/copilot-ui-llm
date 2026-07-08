@@ -389,7 +389,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         targetHostname = 'openrouter.ai';
       }
 
-      const headers: Record<string, any> = { ...req.headers, host: targetHostname };
+      const headers: Record<string, string | string[] | undefined> = { ...req.headers, host: targetHostname };
       if (provider === 'openrouter') {
         if (!headers.authorization) {
           const key = process.env.OPENROUTER_API_KEY;
@@ -586,8 +586,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       // Resolve the provider first to determine which env var to check for the key
       const detectionInstance = new ProviderRegistry(undefined);
-      const detectionConfig = detectionInstance.getExecutionConfig(activeModel);
-      const activeProviderType = detectionConfig.providerType;
+      const activeProviderType = detectionInstance.getProviderType(activeModel);
 
       // Map the active provider to its specific env var
       const providerSpecificKey =
@@ -960,8 +959,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       // Resolve the provider first to determine which env var to check for the key
       const detectionInstance = new ProviderRegistry(undefined);
-      const detectionConfig = detectionInstance.getExecutionConfig(targetModel);
-      const activeProviderType = detectionConfig.providerType;
+      const activeProviderType = detectionInstance.getProviderType(targetModel);
 
       // Map the active provider to its specific env var
       const providerSpecificKey =

@@ -1,6 +1,6 @@
 // check for openrouter models first before falling back to gemini
 if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
-  if (process.env.REVIEWER_MODEL.includes('openrouter') || process.env.REVIEWER_MODEL.includes('/')) {
+  if (process.env.REVIEWER_MODEL.includes('/')) {
     process.env.REVIEWER_PROVIDER = 'openrouter';
   } else {
     process.env.REVIEWER_PROVIDER = 'gemini';

@@ -30,6 +30,11 @@ export class ProviderRegistry {
       return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
     }
     const cleaned = modelName.replace('models/', '').trim();
+    // Return custom provider-namespaced paths early (e.g. openrouter paths) to avoid incorrect partial matching/collapsing
+    if (cleaned.includes('/')) {
+      return cleaned;
+    }
+
     // Prefer exact matches then longest partial match to avoid substring collisions (e.g. gpt-4o vs gpt-4o-mini)
     const exact = MODEL_TIERS.find(m => m === cleaned);
     if (exact) return exact;
@@ -47,11 +52,41 @@ export class ProviderRegistry {
       return DEFAULT_ROLES_CONFIG.auditor.model;
     }
 
-    if (cleaned.includes('/')) {
-      return cleaned;
+    return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
+  }
+
+  /**
+   * Resolves the provider type for a given model or config, without retrieving or validating API keys.
+   */
+  public getProviderType(input: string | ModelProviderConfig): ProviderType {
+    if (typeof input === 'object' && input !== null) {
+      return input.provider;
+    }
+    const model = this.getMappedModel(input as string);
+    const allConfigs = [
+      DEFAULT_ROLES_CONFIG.planner,
+      DEFAULT_ROLES_CONFIG.auditor,
+      ...DEFAULT_ROLES_CONFIG.executorTiers,
+      ...KNOWN_MODELS_CONFIG
+    ];
+
+    let matchedConfig = allConfigs.find(t => t.model === model);
+
+    if (!matchedConfig) {
+      const candidates = allConfigs.filter(t => model.includes(t.model) || t.model.includes(model));
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.model.length - a.model.length);
+        matchedConfig = candidates[0];
+      }
     }
 
-    return MODEL_TIERS[0] || 'gemini-3.1-flash-lite';
+    if (matchedConfig) {
+      return matchedConfig.provider;
+    } else if (model.includes('/')) {
+      return 'openrouter';
+    } else {
+      return 'gemini';
+    }
   }
 
   /**
@@ -103,9 +138,7 @@ export class ProviderRegistry {
       if (!apiKey) {
         throw new Error('Missing API key for OpenRouter provider. Expected OPENROUTER_API_KEY to be set.');
       }
-      // Inject provider credentials into process.env to satisfy Copilot SDK custom provider checks
-      process.env.COPILOT_PROVIDER_API_KEY = apiKey;
-      process.env.COPILOT_PROVIDER_BEARER_TOKEN = apiKey;
+
 
       const proxyBaseUrl = process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/openrouter/api/v1/` : `http://127.0.0.1:${process.env.PORT || 3000}/api/providers/openrouter/api/v1/`;
       let finalBaseUrl = process.env.OPENROUTER_BASE_URL || proxyBaseUrl;
