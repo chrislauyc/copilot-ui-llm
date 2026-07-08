@@ -84,7 +84,7 @@ export class ProviderRegistry {
     } else if (provider === 'anthropic') {
       const apiKey = process.env.ANTHROPIC_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined);
       if (!apiKey) {
-        throw new Error('Missing API key for Anthropic provider. Expected ANTHROPIC_API_KEY or GEMINI_API_KEY (fallback) to be set.');
+        throw new Error('Missing API key for Anthropic provider. Expected ANTHROPIC_API_KEY to be set.');
       }
       return {
         type: 'anthropic',
@@ -98,10 +98,10 @@ export class ProviderRegistry {
         apiKey: process.env.LOCAL_PROVIDER_API_KEY || 'ollama'
       };
     } else if (provider === 'openrouter') {
-      // Support OpenRouter API key env var with GEMINI_API_KEY fallback for convenience in some deployments
-      const apiKey = process.env.OPENROUTER_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined) || process.env.GEMINI_API_KEY;
+      // Support OpenRouter API key env var without GEMINI_API_KEY fallback to avoid silent failure
+      const apiKey = process.env.OPENROUTER_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined);
       if (!apiKey) {
-        throw new Error('Missing API key for OpenRouter provider. Expected OPENROUTER_API_KEY or GEMINI_API_KEY (fallback) to be set.');
+        throw new Error('Missing API key for OpenRouter provider. Expected OPENROUTER_API_KEY to be set.');
       }
       // Inject provider credentials into process.env to satisfy Copilot SDK custom provider checks
       process.env.COPILOT_PROVIDER_API_KEY = apiKey;
@@ -133,7 +133,7 @@ export class ProviderRegistry {
       }
       const apiKey = process.env.OPENAI_API_KEY || (this.apiKey !== 'mock-key' ? this.apiKey : undefined);
       if (!apiKey) {
-        throw new Error('Missing API key for OpenAI provider. Expected OPENAI_API_KEY or GEMINI_API_KEY (fallback) to be set.');
+        throw new Error('Missing API key for OpenAI provider. Expected OPENAI_API_KEY to be set.');
       }
       return {
         type: 'openai',

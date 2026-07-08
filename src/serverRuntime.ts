@@ -239,17 +239,17 @@ function resolveProviderSpecificKey(providerType: ProviderType): string | undefi
     case "gemini":
       return process.env.GEMINI_API_KEY;
     case "openai":
-      return process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY;
+      return process.env.OPENAI_API_KEY;
     case "anthropic":
-      return process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
+      return process.env.ANTHROPIC_API_KEY;
     case "openrouter":
-      return process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
+      return process.env.OPENROUTER_API_KEY;
     case "copilot-native":
     case "local":
       return undefined;
     default: {
       const _exhaustiveCheck: never = providerType;
-      return process.env.GEMINI_API_KEY;
+      return undefined;
     }
   }
 }
@@ -392,7 +392,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const headers: Record<string, any> = { ...req.headers, host: targetHostname };
       if (provider === 'openrouter') {
         if (!headers.authorization) {
-          const key = process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
+          const key = process.env.OPENROUTER_API_KEY;
           if (key) {
             headers.authorization = `Bearer ${key}`;
           }
@@ -589,7 +589,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const detectionConfig = detectionInstance.getExecutionConfig(activeModel);
       const activeProviderType = detectionConfig.providerType;
 
-      // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
+      // Map the active provider to its specific env var
       const providerSpecificKey =
         resolveProviderSpecificKey(activeProviderType);
       const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
@@ -963,7 +963,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const detectionConfig = detectionInstance.getExecutionConfig(targetModel);
       const activeProviderType = detectionConfig.providerType;
 
-      // Map the active provider to its specific env var (or fall back to GEMINI_API_KEY)
+      // Map the active provider to its specific env var
       const providerSpecificKey =
         resolveProviderSpecificKey(activeProviderType);
       const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;

@@ -46,10 +46,7 @@ export function getAuditorExecutionConfig(apiKey?: string): ExecutionConfig {
       keyToUse = process.env.OPENROUTER_API_KEY;
       envVarName = "OPENROUTER_API_KEY";
     }
-    // Fallback to GEMINI_API_KEY if specific one is missing, as many setups route through it
-    if (!keyToUse && provider !== "gemini" && process.env.GEMINI_API_KEY) {
-      keyToUse = process.env.GEMINI_API_KEY;
-    }
+
   }
 
   if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
@@ -90,9 +87,7 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
       keyToUse = process.env.OPENROUTER_API_KEY;
       envVarName = "OPENROUTER_API_KEY";
     }
-    if (!keyToUse && provider !== "gemini" && process.env.GEMINI_API_KEY) {
-      keyToUse = process.env.GEMINI_API_KEY;
-    }
+
   }
 
   if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
