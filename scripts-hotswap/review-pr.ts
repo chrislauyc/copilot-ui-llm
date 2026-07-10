@@ -7,7 +7,7 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
   }
 }
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
@@ -135,13 +135,13 @@ Compliance information is located in AGENTS.md and README.md.
 - If there are zero findings, your summary must state that no actionable findings were identified, and you must not fabricate filler content.
 
 ${incremental
-    ? `The PR DIFF below only covers changes since the last review round. The full comment history of the PR is available in \`comments.md\`.
-Read \`comments.md\` to determine if previously reported blocking findings are now resolved, still open, or no longer applicable.
+    ? `The PR DIFF in \`.review-context/diff.patch\` only covers changes since the last review round. The full comment history of the PR is available in \`.review-context/comments.md\`.
+Read \`.review-context/comments.md\` to determine if previously reported blocking findings are now resolved, still open, or no longer applicable.
 - Treat a prior finding as still open unless the comment history and current diff together indicate it was addressed — i.e., silence in the incremental diff about a prior finding is not evidence of resolution.
 - Do not re-raise a prior finding as newly reported once you judge it addressed; instead, acknowledge it as 'resolved' in the finding output.
 - When a fix introduced in response to prior feedback is found to have introduced a new issue that did not previously exist, raise it as a new finding (regression check).
 - Only set the 'status' field to 'still-open' or 'resolved' on findings that correspond to a prior finding from the comment history.`
-    : `This is a full review of the entire PR diff. Do not set the 'status' field on any findings.`}
+    : `This is a full review of the entire PR diff in \`.review-context/diff.patch\`. Do not set the 'status' field on any findings.`}
 
 Suggestions and nits are not tracked across review rounds -- just report whatever you currently observe, with no 'status' field.
 
@@ -149,7 +149,7 @@ You must not answer conversationally and must strictly invoke 'submit_code_revie
 }
 
 function buildUserPrompt(diff: string, incremental: boolean): string {
-  return `PR DIFF:\n${diff}`;
+  return `The context is available in \`.review-context/\`. Read \`README.md\` to start.`;
 }
 
 async function main() {
@@ -171,6 +171,9 @@ async function main() {
     console.log(`No diff to review for range ${range}, skipping.`);
     return;
   }
+
+  const contextDir = join(process.cwd(), '.review-context');
+  mkdirSync(contextDir, { recursive: true });
 
   const normalizedBotLogin = normalizeBotLogin(getBotLogin());
   const STATE_MARKER_START = '<!-- review-pr:state';
@@ -195,8 +198,38 @@ async function main() {
   }
   
   if (commentsMd) {
-    writeFileSync(join(process.cwd(), 'comments.md'), commentsMd);
+    writeFileSync(join(contextDir, 'comments.md'), commentsMd);
   }
+
+  let diffOutput = diff;
+  if (diff.split('\n').length > 500) {
+    try {
+      const diffStat = execFileSync('git', ['diff', '--stat', range]).toString();
+      diffOutput = `DIFF STAT:\n${diffStat}\n\n${diff}`;
+    } catch (e) {
+      // ignore
+    }
+  }
+  writeFileSync(join(contextDir, 'diff.patch'), diffOutput);
+
+  let prMetaMd = '_No description provided._';
+  try {
+    const rawMeta = execFileSync('gh', ['pr', 'view', prNumber, '--json', 'title,body']).toString();
+    const meta = JSON.parse(rawMeta);
+    const title = meta.title || 'Untitled';
+    const bodyText = meta.body ? meta.body.trim() : '';
+    prMetaMd = `# ${title}\n\n${bodyText || '_No description provided._'}`;
+  } catch (e) {
+    // ignore
+  }
+  writeFileSync(join(contextDir, 'pr-meta.md'), prMetaMd);
+
+  const manifest = `# PR Review Context Files
+- \`diff.patch\`: A standard unified diff of the changes in this PR${incremental ? ' since the last review' : ''}.
+- \`pr-meta.md\`: The PR title and description.
+${commentsMd ? "- `comments.md`: The full comment history of the PR." : ""}
+`;
+  writeFileSync(join(contextDir, 'README.md'), manifest);
 
   const systemPrompt = buildSystemPrompt(incremental);
   const userPrompt = buildUserPrompt(diff, incremental);
@@ -214,8 +247,8 @@ async function main() {
       submitCodeReviewTool,
       userPrompt,
       {
-        toolChoice: { type: 'function', function: { name: submitCodeReviewTool.function.name } },
-        allowOthers: false
+        toolChoice: 'auto',
+        allowOthers: true
       },
       undefined,
       600000,
