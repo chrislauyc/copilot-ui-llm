@@ -7,22 +7,28 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
   }
 }
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper';
-import { submitCodeReviewTool } from '../src/config/tools';
+import { submitCodeReviewTool as baseSubmitCodeReviewTool } from '../src/config/tools';
 import { getFilteredDiff } from './diffFilter';
 import {
   loadPreviousReviewState,
   isCommitReachable,
   isAncestor,
   renderStateMarker,
+  fetchComments,
+  normalizeBotLogin,
+  getBotLogin,
+  type GhComment,
   type ReviewState,
-  type PersistedBlockingFinding,
 } from './reviewState';
 
 interface CodeReviewFinding {
   severity: 'blocking' | 'suggestion' | 'nit';
+  category?: 'bug' | 'security' | 'performance' | 'style';
   file: string;
   line?: number;
   message: string;
@@ -98,28 +104,52 @@ function resolveDiffRange(
   return { range: `${previousState.lastReviewedSha}..${headSha}`, incremental: true };
 }
 
+const submitCodeReviewTool = JSON.parse(JSON.stringify(baseSubmitCodeReviewTool));
+const findingsProps = submitCodeReviewTool.function.parameters.properties.findings.items.properties;
+findingsProps.category = {
+  type: "string",
+  enum: ["bug", "security", "performance", "style"],
+  description: "Optional category of the finding."
+};
+findingsProps.status.description = "Only set this to 'still-open' or 'resolved' for findings that correspond to a prior finding from the comment history. Omit for new findings.";
+
 function buildSystemPrompt(incremental: boolean): string {
   return `You are a code review agent. Review the given PR diff for bugs, compliance issues, and quality concerns.
 
 Compliance information is located in AGENTS.md and README.md.
 
+**Finding-Admission Gate (Strict Rules):**
+- A finding may only be reported when you can answer ALL of the following: 1. Where does the issue occur? 2. Why is it a problem? 3. How did this change introduce or expose it? 4. What input, state, or execution path would trigger it? If you cannot answer all four, DO NOT report it.
+- Prefer one well-evidenced finding over multiple speculative ones, and merge closely related findings into a single finding.
+
+**Scope Rules:**
+- Limit findings to changed lines, changed blocks, or behavior directly affected by the changed code (including touched callers/callees, changed contracts, data flow, and tests).
+- DO NOT raise cleanup suggestions for unrelated pre-existing code.
+- DO NOT raise issues against pre-existing code unless the current PR newly breaks, exposes, or worsens that code path.
+- If the PR consists primarily of code movement/refactoring, limit findings to newly introduced bugs, regressions, or meaningful performance problems.
+- DO NOT raise style/preference findings unless they create a real readability, consistency, or maintenance problem, or violate an established repo standard.
+
+**Classification and Output Rules:**
+- Keep each finding's message concise (target: under ~150 words) unless a code snippet is necessary for clarity.
+- Never state that the PR is approved or ready to merge, and never attempt to merge the PR.
+- If there are zero findings, your summary must state that no actionable findings were identified, and you must not fabricate filler content.
+
 ${incremental
-    ? `The PR DIFF below only covers changes since the last review round. A list of previously reported blocking findings is included -- for each one, check whether it is now resolved, still open, or (if it no longer applies at all) drop it. Only set the 'status' field on findings that correspond to one of these prior items. Do not re-raise a previously reported blocking finding as a new finding; instead report it once with the appropriate status.`
-    : `This is a full review of the entire PR diff (no prior review state was found, or it could not be used). Do not set the 'status' field on any findings.`}
+    ? `The PR DIFF below only covers changes since the last review round. The full comment history of the PR is available in \`comments.md\`.
+Read \`comments.md\` to determine if previously reported blocking findings are now resolved, still open, or no longer applicable.
+- Treat a prior finding as still open unless the comment history and current diff together indicate it was addressed — i.e., silence in the incremental diff about a prior finding is not evidence of resolution.
+- Do not re-raise a prior finding as newly reported once you judge it addressed; instead, acknowledge it as 'resolved' in the finding output.
+- When a fix introduced in response to prior feedback is found to have introduced a new issue that did not previously exist, raise it as a new finding (regression check).
+- Only set the 'status' field to 'still-open' or 'resolved' on findings that correspond to a prior finding from the comment history.`
+    : `This is a full review of the entire PR diff. Do not set the 'status' field on any findings.`}
 
 Suggestions and nits are not tracked across review rounds -- just report whatever you currently observe, with no 'status' field.
 
 You must not answer conversationally and must strictly invoke 'submit_code_review'.`;
 }
 
-function buildUserPrompt(diff: string, previousState: ReviewState | null, incremental: boolean): string {
-  if (!incremental || !previousState || previousState.blockingFindings.length === 0) {
-    return `PR DIFF:\n${diff}`;
-  }
-  const findingsList = previousState.blockingFindings
-    .map((f: PersistedBlockingFinding) => `- \`${f.file}${f.line ? ':' + f.line : ''}\`: ${f.message}`)
-    .join('\n');
-  return `Previously reported blocking findings (verify each is resolved, still-open, or no longer applicable):\n${findingsList}\n\nPR DIFF (since last reviewed commit):\n${diff}`;
+function buildUserPrompt(diff: string, incremental: boolean): string {
+  return `PR DIFF:\n${diff}`;
 }
 
 async function main() {
@@ -132,7 +162,9 @@ async function main() {
     process.exit(1);
   }
 
-  const previousState = loadPreviousReviewState(prNumber);
+  const comments = fetchComments(prNumber);
+
+  const previousState = loadPreviousReviewState(prNumber, comments);
   const { range, incremental } = resolveDiffRange(baseSha, headSha, previousState);
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
@@ -140,8 +172,34 @@ async function main() {
     return;
   }
 
+  const normalizedBotLogin = normalizeBotLogin(getBotLogin());
+  const STATE_MARKER_START = '<!-- review-pr:state';
+  const STATE_MARKER_END = '-->';
+  
+  let commentsMd = '';
+  for (const c of comments) {
+    const author = c.author?.login || 'unknown';
+    const isBot = normalizeBotLogin(author) === normalizedBotLogin;
+    const authorTag = isBot ? `${author} (BOT)` : author;
+    
+    let body = c.body;
+    const startIdx = body.indexOf(STATE_MARKER_START);
+    if (startIdx !== -1) {
+      const endIdx = body.indexOf(STATE_MARKER_END, startIdx);
+      if (endIdx !== -1) {
+        body = body.slice(0, startIdx) + body.slice(endIdx + STATE_MARKER_END.length);
+      }
+    }
+    
+    commentsMd += `### Comment by ${authorTag} at ${c.createdAt || 'unknown time'}\n\n${body.trim()}\n\n---\n\n`;
+  }
+  
+  if (commentsMd) {
+    writeFileSync(join(process.cwd(), 'comments.md'), commentsMd);
+  }
+
   const systemPrompt = buildSystemPrompt(incremental);
-  const userPrompt = buildUserPrompt(diff, previousState, incremental);
+  const userPrompt = buildUserPrompt(diff, incremental);
 
   const executionConfig = getReviewerExecutionConfig();
   const proxyServer = await startProviderProxy();
@@ -206,52 +264,8 @@ async function main() {
     sessionId ? `<sub>session_id: \`${sessionId}\`</sub>` : '',
   ].filter(Boolean).join('\n\n');
 
-  // Carry forward blocking findings across runs -- but only in incremental
-  // mode. In full-review mode (fallback due to force-push/rebase/shallow
-  // clone, or no prior state), the model reviewed the ENTIRE diff and was not
-  // shown the prior findings list at all (see buildSystemPrompt/buildUserPrompt),
-  // so it has no way to mark anything 'resolved'. Treating its full-review
-  // output as authoritative and NOT seeding from previousState avoids stale
-  // findings persisting forever after every force-push. In incremental mode,
-  // the model only sees new changes, so a prior finding it doesn't mention at
-  // all (e.g. it lives in a file untouched by this round's diff) must NOT be
-  // silently dropped -- it should still be considered open until something
-  // explicitly reports it 'resolved'.
-  //
-  // Keyed on file:line (or file alone if line is undefined) to distinguish
-  // multiple findings in the same file and prevent data loss. A prior finding
-  // that is not re-reported this round is preserved as-is, ensuring no blocking
-  // issue is silently dropped unless explicitly marked 'resolved' by the model.
-  const findingKey = (f: { file: string; line?: number }) => 
-    f.line !== undefined ? `${f.file}:${f.line}` : f.file;
-
-  const carriedForward = new Map<string, PersistedBlockingFinding>();
-
-  if (incremental) {
-    for (const f of previousState?.blockingFindings || []) {
-      carriedForward.set(findingKey(f), f);
-    }
-  }
-
-  // Now apply what the model actually reported this round: 'resolved' removes
-  // it, 'still-open' refreshes it, and a fresh blocking finding with no status
-  // (either a genuinely new incremental finding, or any finding at all in
-  // full-review mode) is added/kept as-is. Prior findings not mentioned in this
-  // round remain in carriedForward unchanged.
-  for (const f of blockingFindings) {
-    const key = findingKey(f);
-    if (f.status === 'resolved') {
-      carriedForward.delete(key);
-    } else {
-      carriedForward.set(key, { file: f.file, line: f.line, message: f.message });
-    }
-  }
-
-  const stillOpenBlocking: PersistedBlockingFinding[] = Array.from(carriedForward.values());
-
   const newState: ReviewState = {
     lastReviewedSha: headSha,
-    blockingFindings: stillOpenBlocking,
     session_id: sessionId,
   };
   const bodyWithState = `${body}\n\n${renderStateMarker(newState)}`;
