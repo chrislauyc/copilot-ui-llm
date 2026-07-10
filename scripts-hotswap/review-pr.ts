@@ -242,6 +242,10 @@ async function main() {
     process.exit(1);
   }
 
+  if (result.findings.length === 0) {
+    result.summary = 'No actionable findings were identified.';
+  }
+
   const bySeverity = (sev: CodeReviewFinding['severity']) =>
     result.findings.filter((f) => f.severity === sev);
 
