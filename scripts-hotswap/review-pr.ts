@@ -7,7 +7,7 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
   }
 }
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
@@ -131,6 +131,10 @@ Compliance information is located in AGENTS.md and README.md.
 - If the PR consists primarily of code movement/refactoring, limit findings to newly introduced bugs, regressions, or meaningful performance problems.
 - DO NOT raise style/preference findings unless they create a real readability, consistency, or maintenance problem, or violate an established repo standard.
 
+**Tool Use Policy:**
+- You may only use tools to read files from the repository context and call 'submit_code_review'.
+- Do not invoke any other arbitrary tools or commands.
+
 **Classification and Output Rules:**
 - Keep each finding's message concise (target: under ~150 words) unless a code snippet is necessary for clarity.
 - Never state that the PR is approved or ready to merge, and never attempt to merge the PR.
@@ -199,16 +203,15 @@ async function main() {
   
   writeFileSync(join(contextDir, 'comments.md'), commentsMd || '');
 
-  let diffOutput = diff;
   if (diff.split('\n').length > 500) {
     try {
       const diffStat = execFileSync('git', ['diff', '--stat', range]).toString();
-      diffOutput = `DIFF STAT:\n${diffStat}\n\n${diff}`;
+      writeFileSync(join(contextDir, 'diff-stat.txt'), diffStat);
     } catch (e) {
       // ignore
     }
   }
-  writeFileSync(join(contextDir, 'diff.patch'), diffOutput);
+  writeFileSync(join(contextDir, 'diff.patch'), diff);
 
   let prMetaMd = '_No description provided._';
   try {
@@ -222,9 +225,11 @@ async function main() {
   }
   writeFileSync(join(contextDir, 'pr-meta.md'), prMetaMd);
 
+  const hasDiffStat = existsSync(join(contextDir, 'diff-stat.txt'));
+
   const manifest = `# PR Review Context Files
 - \`diff.patch\`: A standard unified diff of the changes in this PR${incremental ? ' since the last review' : ''}.
-- \`pr-meta.md\`: The PR title and description.
+${hasDiffStat ? '- `diff-stat.txt`: A summary of the changed files and lines.\n' : ''}- \`pr-meta.md\`: The PR title and description.
 - \`comments.md\`: The full comment history of the PR.
 `;
   writeFileSync(join(contextDir, 'README.md'), manifest);
@@ -249,7 +254,7 @@ async function main() {
         allowOthers: true
       },
       undefined,
-      600000,
+      50,
       (id) => {
         sessionId = id;
         setActiveOpenRouterSessionId(id);
