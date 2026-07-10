@@ -6,8 +6,8 @@ import { execFileSync } from 'node:child_process';
  * without any external/persistent storage -- CI containers are not assumed to
  * persist anything between runs, but PR comments obviously do.
  */
-const STATE_MARKER_START = '<!-- review-pr:state';
-const STATE_MARKER_END = '-->';
+export const STATE_MARKER_START = '<!-- review-pr:state';
+export const STATE_MARKER_END = '-->';
 
 export interface ReviewState {
   lastReviewedSha: string;

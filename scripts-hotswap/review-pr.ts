@@ -22,6 +22,8 @@ import {
   fetchComments,
   normalizeBotLogin,
   getBotLogin,
+  STATE_MARKER_START,
+  STATE_MARKER_END,
   type GhComment,
   type ReviewState,
 } from './reviewState';
@@ -104,7 +106,7 @@ function resolveDiffRange(
   return { range: `${previousState.lastReviewedSha}..${headSha}`, incremental: true };
 }
 
-const submitCodeReviewTool = JSON.parse(JSON.stringify(baseSubmitCodeReviewTool));
+const submitCodeReviewTool = typeof structuredClone === 'function' ? structuredClone(baseSubmitCodeReviewTool) : JSON.parse(JSON.stringify(baseSubmitCodeReviewTool));
 const findingsProps = submitCodeReviewTool.function.parameters.properties.findings.items.properties;
 findingsProps.category = {
   type: "string",
@@ -148,7 +150,7 @@ Suggestions and nits are not tracked across review rounds -- just report whateve
 You must not answer conversationally and must strictly invoke 'submit_code_review'.`;
 }
 
-function buildUserPrompt(diff: string, incremental: boolean): string {
+function buildUserPrompt(): string {
   return `The context is available in \`.review-context/\`. Read \`README.md\` to start.`;
 }
 
@@ -176,8 +178,6 @@ async function main() {
   mkdirSync(contextDir, { recursive: true });
 
   const normalizedBotLogin = normalizeBotLogin(getBotLogin());
-  const STATE_MARKER_START = '<!-- review-pr:state';
-  const STATE_MARKER_END = '-->';
   
   let commentsMd = '';
   for (const c of comments) {
@@ -185,7 +185,7 @@ async function main() {
     const isBot = normalizeBotLogin(author) === normalizedBotLogin;
     const authorTag = isBot ? `${author} (BOT)` : author;
     
-    let body = c.body;
+    let body = c.body || '';
     const startIdx = body.indexOf(STATE_MARKER_START);
     if (startIdx !== -1) {
       const endIdx = body.indexOf(STATE_MARKER_END, startIdx);
@@ -197,9 +197,7 @@ async function main() {
     commentsMd += `### Comment by ${authorTag} at ${c.createdAt || 'unknown time'}\n\n${body.trim()}\n\n---\n\n`;
   }
   
-  if (commentsMd) {
-    writeFileSync(join(contextDir, 'comments.md'), commentsMd);
-  }
+  writeFileSync(join(contextDir, 'comments.md'), commentsMd || '');
 
   let diffOutput = diff;
   if (diff.split('\n').length > 500) {
@@ -227,12 +225,12 @@ async function main() {
   const manifest = `# PR Review Context Files
 - \`diff.patch\`: A standard unified diff of the changes in this PR${incremental ? ' since the last review' : ''}.
 - \`pr-meta.md\`: The PR title and description.
-${commentsMd ? "- `comments.md`: The full comment history of the PR." : ""}
+- \`comments.md\`: The full comment history of the PR.
 `;
   writeFileSync(join(contextDir, 'README.md'), manifest);
 
   const systemPrompt = buildSystemPrompt(incremental);
-  const userPrompt = buildUserPrompt(diff, incremental);
+  const userPrompt = buildUserPrompt();
 
   const executionConfig = getReviewerExecutionConfig();
   const proxyServer = await startProviderProxy();
@@ -276,7 +274,9 @@ ${commentsMd ? "- `comments.md`: The full comment history of the PR." : ""}
   }
 
   if (result.findings.length === 0) {
-    result.summary = 'No actionable findings were identified.';
+    if (!result.summary || result.summary.trim() === '') {
+      result.summary = 'No actionable findings were identified.';
+    }
   }
 
   const bySeverity = (sev: CodeReviewFinding['severity']) =>
