@@ -61,8 +61,6 @@ export function fetchComments(prNumber: string): GhComment[] {
  * callers should treat null as "do a full review", never as a hard error.
  */
 export function loadPreviousReviewState(prNumber: string, comments?: GhComment[]): ReviewState | null {
-  const INCREMENTAL_IS_SUBOPTIMAL = true; // TODO: We need to optimize it further before enabling it.
-  if(INCREMENTAL_IS_SUBOPTIMAL) return null;
   if (!comments) {
     comments = fetchComments(prNumber);
   }
