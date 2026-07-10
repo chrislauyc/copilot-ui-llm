@@ -38,12 +38,24 @@ function getBotLogin(): string {
 }
 
 /**
+ * Normalizes a GitHub bot login for comparison. `gh`'s `--json comments`
+ * (GraphQL-backed) has been observed reporting the standard Actions bot as
+ * plain "github-actions", while the REST API / UI show "github-actions[bot]".
+ * Stripping the suffix on both sides makes the comparison robust to either form.
+ */
+function normalizeBotLogin(login: string | undefined): string {
+  return (login || '').replace(/\[bot\]$/, '');
+}
+
+/**
  * Fetches all comments on the PR and returns the most recent one authored by
  * this bot that contains a parseable state marker. Returns null if there is no
  * prior state, the marker is malformed, or the gh call fails for any reason --
  * callers should treat null as "do a full review", never as a hard error.
  */
 export function loadPreviousReviewState(prNumber: string): ReviewState | null {
+  const INCREMENTAL_IS_SUBOPTIMAL = true; // TODO: We need to optimize it further before enabling it.
+  if(INCREMENTAL_IS_SUBOPTIMAL) return null;
   let comments: GhComment[];
   try {
     const raw = execFileSync(
@@ -60,10 +72,14 @@ export function loadPreviousReviewState(prNumber: string): ReviewState | null {
   const botLogin = getBotLogin();
   for (let i = comments.length - 1; i >= 0; i--) {
     const comment = comments[i];
-    if (comment?.author?.login !== botLogin) continue;
+    if(!comment) {
+      throw new Error("[review-pr] Unexpected: comment is falsy");
+    }
+    if (normalizeBotLogin(comment.author?.login) !== normalizeBotLogin(botLogin)) continue;
     const state = parseStateMarker(comment.body);
     if (state) return state;
   }
+  console.log(`[review-pr] no prior state found among ${comments.length} comment(s) on PR #${prNumber} (expected bot login "${botLogin}"; saw authors: ${JSON.stringify(comments.map(c => c?.author?.login))})`);
   return null;
 }
 
