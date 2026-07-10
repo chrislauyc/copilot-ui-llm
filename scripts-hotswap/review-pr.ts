@@ -254,7 +254,7 @@ ${hasDiffStat ? '- `diff-stat.txt`: A summary of the changed files and lines.\n'
         allowOthers: true
       },
       undefined,
-      50,
+      600000,
       (id) => {
         sessionId = id;
         setActiveOpenRouterSessionId(id);
