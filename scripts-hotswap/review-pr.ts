@@ -253,7 +253,8 @@ async function main() {
     items.length
       ? `**${label}**\n` + items.map((f) => {
           const statusTag = f.status ? ` _(${f.status})_` : '';
-          return `- \`${f.file}${f.line ? ':' + f.line : ''}\`: ${f.message}${statusTag}`;
+          const categoryTag = f.category ? `[${f.category}] ` : '';
+          return `- \`${f.file}${f.line ? ':' + f.line : ''}\`: ${categoryTag}${f.message}${statusTag}`;
         }).join('\n')
       : '';
 
