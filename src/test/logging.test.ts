@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { installConsoleInterceptors, restoreConsoleInterceptors } from '../interceptors';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { writeLog, LogLevel, setLogLevels, lastRunLog, initLogFile } from '../orchestrator/sessionState';
@@ -6,6 +7,13 @@ import { writeLog, LogLevel, setLogLevels, lastRunLog, initLogFile } from '../or
 const LOG_FILE = '/tmp/debug_log.txt';
 
 describe('Logging System Tests', () => {
+  beforeAll(() => {
+    installConsoleInterceptors();
+  });
+
+  afterAll(() => {
+    restoreConsoleInterceptors();
+  });
   beforeEach(() => {
     // Clear in-memory log
     lastRunLog.length = 0;
@@ -67,5 +75,62 @@ describe('Logging System Tests', () => {
     const fileContent = fs.readFileSync(LOG_FILE, 'utf8');
     expect(fileContent).toContain('[WARN] Warn msg');
     expect(fileContent).toContain('[ERROR] Error msg');
+  });
+  it('should intercept console.warn and log to file and memory at WARN level', () => {
+    const testMsg = `Console Warn Test Message ${Date.now()}`;
+    
+    console.warn(testMsg);
+    
+    // Check in-memory logs
+    const inMemory = lastRunLog.some(l => l.includes(testMsg) && l.includes('[WARN]'));
+    expect(inMemory).toBe(true);
+    
+    // Check file logs
+    const fileContent = fs.readFileSync(LOG_FILE, 'utf8');
+    expect(fileContent).toContain(testMsg);
+    expect(fileContent).toContain('[WARN]');
+  });
+
+  it('should intercept console.error and log to file and memory at ERROR level', () => {
+    const testMsg = `Console Error Test Message ${Date.now()}`;
+    
+    console.error(testMsg);
+    
+    // Check in-memory logs
+    const inMemory = lastRunLog.some(l => l.includes(testMsg) && l.includes('[ERROR]'));
+    expect(inMemory).toBe(true);
+    
+    // Check file logs
+    const fileContent = fs.readFileSync(LOG_FILE, 'utf8');
+    expect(fileContent).toContain(testMsg);
+    expect(fileContent).toContain('[ERROR]');
+  });
+
+
+  it('should preserve Error object message and stack in console.error', () => {
+    const testErrorMsg = `Some unique dynamic error ${Date.now()}`;
+    const testError = new Error(testErrorMsg);
+    
+    console.error('Failed to run task:', testError);
+    
+    // Check in-memory logs
+    const inMemory = lastRunLog.some(l => l.includes('Failed to run task:') && l.includes(testErrorMsg) && l.includes('[ERROR]'));
+    expect(inMemory).toBe(true);
+    
+    // Check file logs
+    const fileContent = fs.readFileSync(LOG_FILE, 'utf8');
+    expect(fileContent).toContain('Failed to run task:');
+    expect(fileContent).toContain(testErrorMsg);
+    expect(fileContent).toContain('[ERROR]');
+  });
+
+  it('should format normal objects as JSON in console.log', () => {
+    const testObj = { foo: 'bar', baz: 42 };
+    console.log('Object info:', testObj);
+    
+    // Check file logs
+    const fileContent = fs.readFileSync(LOG_FILE, 'utf8');
+    expect(fileContent).toContain('Object info:');
+    expect(fileContent).toContain('{"foo":"bar","baz":42}');
   });
 });
