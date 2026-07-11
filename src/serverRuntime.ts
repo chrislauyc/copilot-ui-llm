@@ -82,6 +82,7 @@ import { fetchStubbedTraceResponse } from './utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from './utils/escalationStore';
 import { createSseWriter } from './utils/sseWriter';
 import { startSessionGarbageCollector } from './services/sessionGarbageCollector';
+import { installConsoleInterceptors } from './interceptors';
 
 if (process.env.NODE_ENV !== 'test') {
   dotenv.config();
@@ -270,41 +271,7 @@ stopSessionGarbageCollector = startSessionGarbageCollector({
 });
 
 
-// Intercept stderr to capture subprocess crashes
-const originalStderrWrite = process.stderr.write.bind(process.stderr);
-process.stderr.write = function (
-  chunk: string | Uint8Array,
-  encoding?: BufferEncoding | ((err: Error | null | undefined) => void),
-  callback?: (err: Error | null | undefined) => void
-): boolean {
-  const str = chunk.toString();
-  if (str.trim()) {
-    writeLog(`[STDERR] ${str.trim()}`);
-  }
-  
-  if (typeof encoding === 'function') {
-    return originalStderrWrite(chunk, encoding);
-  }
-  
-  return originalStderrWrite(chunk, encoding, callback);
-};
-
-// Intercept console.log
-const originalLog = console.log;
-console.log = function(...args: unknown[]) {
-  const message = args.map(arg => 
-    typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
-  ).join(' ');
-  
-  const sanitizedMessage = sanitizeSensitives(message, sensitiveValuesCache || new Set());
-  
-  // Avoid logging our own level-prefixed logs back to writeLog to prevent recursion or redundancy
-  if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
-    writeLog(`[LOG] ${sanitizedMessage}`, LogLevel.DEBUG);
-  }
-
-  return originalLog.apply(console, [sanitizedMessage]);
-};
+installConsoleInterceptors();
 
 function isStreamError(err: unknown): err is Error & { code?: string } {
   return err instanceof Error && typeof (err as unknown as Record<string, unknown>).code === 'string';
