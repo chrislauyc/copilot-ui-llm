@@ -76,7 +76,7 @@ function getAddedLines(diffOutput: string): Record<string, Set<number>> {
     if (line.startsWith('@@ ')) {
       // Hunk header: @@ -oldStart,oldLength +newStart,newLength @@
       const match = line.match(/^\s*@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/);
-      if (match) {
+      if (match && match[1]) {
         currentLineNumber = parseInt(match[1], 10);
       }
       continue;
@@ -85,8 +85,9 @@ function getAddedLines(diffOutput: string): Record<string, Set<number>> {
       continue;
     }
     if (line.startsWith('+')) {
-      if (addedLinesPerFile[currentFile]) {
-        addedLinesPerFile[currentFile].add(currentLineNumber);
+      const currentSet = currentFile ? addedLinesPerFile[currentFile] : undefined;
+      if (currentSet) {
+        currentSet.add(currentLineNumber);
       }
       currentLineNumber++;
     } else if (line.startsWith(' ')) {
@@ -236,7 +237,8 @@ function checkFileForViolations(filePath: string, addedLines: Set<number>): Viol
 
       const idx = commentText.indexOf(directiveWord);
       const remaining = commentText.substring(idx + directiveWord.length).trim();
-      const cleanLine = remaining.split('\n')[0].replace(/\*\//g, '').trim();
+      const firstLine = remaining.split('\n')[0];
+      const cleanLine = firstLine ? firstLine.replace(/\*\//g, '').trim() : '';
       const rules = cleanLine ? cleanLine.split(',').map(r => r.trim()).filter(Boolean) : [];
 
       eslintDirectives.push({ type, rules, line: comment.line });

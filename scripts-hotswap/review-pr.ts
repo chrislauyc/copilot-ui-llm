@@ -10,9 +10,9 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
-import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper';
-import { submitCodeReviewTool as baseSubmitCodeReviewTool } from '../src/config/tools';
+import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime.ts';
+import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper.ts';
+import { submitCodeReviewTool as baseSubmitCodeReviewTool } from '../src/config/tools.ts';
 import { getFilteredDiff } from './diffFilter';
 import {
   loadPreviousReviewState,
