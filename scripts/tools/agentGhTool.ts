@@ -50,16 +50,28 @@ export function isAllowedGhCommand(args: string[]): boolean {
   return ALLOWED_GH_COMMANDS.includes(subcommandOf(args));
 }
 
-function extractTargetId(arg: string | undefined): string | null {
-  if (!arg) return null;
-  const match = arg.match(/\/(\d+)$/);
-  return match ? match[1] : arg;
+/**
+ * Determines whether a given Git reference/branch name is associated with the triggering issue.
+ * Employs exact boundary matching so that triggering issue #5 is associated with branch
+ * 'issue/5-fix', 'issue-5', or 'issue_5', but not 'bug/50-fix', 'feature-555', 'issue/55', or 'some5text'.
+ */
+export function isBranchNameAssociatedWithIssue(ref: string, triggeringIssueNumber: string): boolean {
+  const pattern = new RegExp(`(^|[/\\-_])${triggeringIssueNumber}($|[/\\-_])`);
+  return pattern.test(ref);
 }
 
-let cachedPrNumbers: string[] | null = null;
+export function extractTargetId(arg: string | undefined): string | null {
+  if (!arg) return null;
+  const match = arg.match(/\/(\d+)$/);
+  return (match ? match[1] : null) ?? arg;
+}
 
-function getAllowedPrNumbers(triggeringIssueNumber: string): string[] {
-  if (cachedPrNumbers !== null) return cachedPrNumbers;
+const cachedPrNumbersByIssue: Record<string, string[]> = {};
+
+export function getAllowedPrNumbers(triggeringIssueNumber: string): string[] {
+  if (cachedPrNumbersByIssue[triggeringIssueNumber] !== undefined) {
+    return cachedPrNumbersByIssue[triggeringIssueNumber]!;
+  }
   try {
     const raw = execFileSync('gh', ['pr', 'list', '--json', 'number,headRefName'], {
       encoding: 'utf-8',
@@ -69,21 +81,32 @@ function getAllowedPrNumbers(triggeringIssueNumber: string): string[] {
     const allowed = prs
       .filter((pr) => {
         const ref = pr.headRefName || '';
-        return (
-          ref === `issue/${triggeringIssueNumber}` ||
-          ref.startsWith(`issue/${triggeringIssueNumber}-`) ||
-          ref === `issue-${triggeringIssueNumber}` ||
-          ref.startsWith(`issue-${triggeringIssueNumber}-`) ||
-          ref.includes(`/${triggeringIssueNumber}`) ||
-          ref.includes(`-${triggeringIssueNumber}`)
-        );
+        return isBranchNameAssociatedWithIssue(ref, triggeringIssueNumber);
       })
       .map((pr) => String(pr.number));
-    cachedPrNumbers = allowed;
-    return cachedPrNumbers;
+    cachedPrNumbersByIssue[triggeringIssueNumber] = allowed;
+    return allowed;
   } catch (err) {
     console.warn(`[agentGhTool] Failed to fetch allowed PRs for issue #${triggeringIssueNumber}:`, err);
     return [];
+  }
+}
+
+/**
+ * Directly queries the GitHub CLI to verify if a target PR is formally linked to the triggering issue.
+ */
+export function isPrLinkedToIssue(targetPrId: string, triggeringIssueNumber: string): boolean {
+  try {
+    const raw = execFileSync('gh', ['pr', 'view', targetPrId, '--json', 'issues'], {
+      encoding: 'utf-8',
+      timeout: 15000,
+    });
+    const prData = JSON.parse(raw) as { issues?: Array<{ number: number }> };
+    const issueNumbers = prData.issues?.map((i) => String(i.number)) || [];
+    return issueNumbers.includes(triggeringIssueNumber);
+  } catch (err) {
+    console.warn(`[agentGhTool] Failed to verify linked issues for PR #${targetPrId} via gh pr view:`, err);
+    return false;
   }
 }
 
@@ -120,18 +143,21 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
       required: ['args'],
     },
     async ({ args }): Promise<RunGhCommandResult> => {
+      // 1. Budget check
       if (callCount >= MAX_CALLS) {
         const message = `Rejected: maximum tool call budget of ${MAX_CALLS} exceeded for this run.`;
         console.warn(`[agentGhTool] ${message}`);
         return { error: message };
       }
-      callCount++;
 
+      // 2. Format checks
       if (!Array.isArray(args) || args.length < 2) {
         const message = `Rejected: gh command must include at least a resource and an action (got ${JSON.stringify(args)}).`;
         console.warn(`[agentGhTool] ${message}`);
         return { error: message };
       }
+
+      // 3. Subcommand allowlist check
       if (!isAllowedGhCommand(args)) {
         const message =
           `Rejected: "gh ${subcommandOf(args)}" is not on the allowlist. ` +
@@ -139,6 +165,8 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         console.warn(`[agentGhTool] Rejected disallowed gh subcommand: "${subcommandOf(args)}" (full args: ${JSON.stringify(args)})`);
         return { error: message };
       }
+
+      // 4. Parameter security check: --repo / -R (no cross-repo)
       const hasRepoArg = args.some((arg) =>
         arg === '--repo' || arg.startsWith('--repo=') || arg.startsWith('-R')
       );
@@ -147,6 +175,8 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         console.warn(`[agentGhTool] ${message}`);
         return { error: message };
       }
+
+      // 5. Parameter security check: --body-file / -F (no local file access)
       const hasBodyFileArg = args.some((arg) =>
         arg === '--body-file' || arg.startsWith('--body-file=') || arg === '-F' || arg.startsWith('-F')
       );
@@ -156,6 +186,7 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         return { error: message };
       }
 
+      // 6. Target-ID boundary validation (scoping to the triggering issue/PR)
       const triggeringIssueNumber = process.env.ISSUE_NUMBER;
       if (triggeringIssueNumber) {
         const targetId = extractTargetId(args[2]);
@@ -171,13 +202,19 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
 
         if (['pr view', 'pr diff', 'pr comment'].includes(subcommand)) {
           const allowedPrs = getAllowedPrNumbers(triggeringIssueNumber);
-          if (!targetId || !allowedPrs.includes(targetId)) {
+          const isBranchMatch = targetId !== null && allowedPrs.includes(targetId);
+          const isDirectLinkMatch = targetId !== null && isPrLinkedToIssue(targetId, triggeringIssueNumber);
+
+          if (!targetId || (!isBranchMatch && !isDirectLinkMatch)) {
             const message = `Rejected: gh command target PR (${args[2] || 'none'}) is not linked or associated with triggering issue #${triggeringIssueNumber} (allowed PRs: ${allowedPrs.join(', ') || 'none'}).`;
             console.warn(`[agentGhTool] ${message}`);
             return { error: message };
           }
         }
       }
+
+      // 7. Increment call count only after all validation checks have passed successfully
+      callCount++;
 
       try {
         console.log(`[agentGhTool] Running: gh ${args.join(' ')}`);
