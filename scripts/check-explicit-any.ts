@@ -83,66 +83,19 @@ function checkFileForViolations(filePath: string): Violation[] {
     return sourceFile.getLineAndCharacterOfPosition(pos).line + 1;
   }
 
-  // 1. Gather all unique comment ranges in the file using leading/trailing trivia
-  interface CommentRangeInfo {
-    text: string;
-    pos: number;
-    end: number;
-    line: number;
-  }
-
-  const commentKeys = new Set<string>();
-  const commentRanges: CommentRangeInfo[] = [];
-
-  function visitComments(node: ts.Node) {
-    const leading = ts.getLeadingCommentRanges(content, node.pos);
-    if (leading) {
-      for (const r of leading) {
-        const key = `${r.pos}-${r.end}`;
-        if (!commentKeys.has(key)) {
-          commentKeys.add(key);
-          commentRanges.push({
-            text: content.substring(r.pos, r.end),
-            pos: r.pos,
-            end: r.end,
-            line: getLineNumber(r.pos)
-          });
-        }
-      }
-    }
-
-    const trailing = ts.getTrailingCommentRanges(content, node.end);
-    if (trailing) {
-      for (const r of trailing) {
-        const key = `${r.pos}-${r.end}`;
-        if (!commentKeys.has(key)) {
-          commentKeys.add(key);
-          commentRanges.push({
-            text: content.substring(r.pos, r.end),
-            pos: r.pos,
-            end: r.end,
-            line: getLineNumber(r.pos)
-          });
-        }
-      }
-    }
-
-    ts.forEachChild(node, visitComments);
-  }
-
-  visitComments(sourceFile);
-
-  // 2. Parse eslint directives from the gathered comments
   const eslintDirectives: EslintDirective[] = [];
-  for (const comment of commentRanges) {
-    const commentText = comment.text;
-    if (commentText.includes('eslint-disable') || commentText.includes('eslint-enable')) {
+  
+  for (let i = 0; i < fileLines.length; i++) {
+    const lineText = fileLines[i];
+    const lineNum = i + 1;
+    
+    if (lineText.includes('eslint-disable') || lineText.includes('eslint-enable')) {
       let type: EslintDirective['type'] = 'disable';
-      if (commentText.includes('eslint-disable-next-line')) {
+      if (lineText.includes('eslint-disable-next-line')) {
         type = 'disable-next-line';
-      } else if (commentText.includes('eslint-disable-line')) {
+      } else if (lineText.includes('eslint-disable-line')) {
         type = 'disable-line';
-      } else if (commentText.includes('eslint-enable')) {
+      } else if (lineText.includes('eslint-enable')) {
         type = 'enable';
       }
 
@@ -150,26 +103,27 @@ function checkFileForViolations(filePath: string): Violation[] {
                             type === 'disable-line' ? 'eslint-disable-line' :
                             type === 'disable' ? 'eslint-disable' : 'eslint-enable';
 
-      const idx = commentText.indexOf(directiveWord);
-      const remaining = commentText.substring(idx + directiveWord.length).trim();
-      const firstLine = remaining.split('\n')[0];
+      const idx = lineText.indexOf(directiveWord);
+      const remaining = lineText.substring(idx + directiveWord.length).trim();
+      const firstLine = remaining;
       const cleanLine = firstLine ? firstLine.replace(/\*\//g, '').trim() : '';
       const rules = cleanLine ? (cleanLine.split('--')[0] || '').split(',').map(r => r.trim()).filter(Boolean) : [];
 
-      eslintDirectives.push({ type, rules, line: comment.line });
+      eslintDirectives.push({ type, rules, line: lineNum });
     }
   }
 
-  // 3. Check gathered comments for @ts-ignore / @ts-expect-error
-  for (const comment of commentRanges) {
-    const commentText = comment.text;
-    if (/@ts-(?:ignore|expect-error)\b/.test(commentText)) {
+  // Check for @ts-ignore / @ts-expect-error
+  for (let i = 0; i < fileLines.length; i++) {
+    const lineText = fileLines[i];
+    const lineNum = i + 1;
+    if (/@ts-(?:ignore|expect-error)\b/.test(lineText)) {
       const rule = '@typescript-eslint/ban-ts-comment';
-      if (!isViolationDisabled(comment.line, rule, eslintDirectives)) {
+      if (!isViolationDisabled(lineNum, rule, eslintDirectives)) {
         violations.push({
           file: filePath,
-          line: comment.line,
-          lineContent: fileLines[comment.line - 1]?.trim() || '',
+          line: lineNum,
+          lineContent: lineText.trim(),
           reason: 'Usage of @ts-ignore or @ts-expect-error is forbidden by the type discipline guide.'
         });
       }
