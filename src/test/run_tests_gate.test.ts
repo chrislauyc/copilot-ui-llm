@@ -54,14 +54,17 @@ describe('runTests Gate Unit Tests', () => {
 
   it('runWithTimeout does NOT trigger mock failure for git-worktree substring when process.env.VITEST is not true', async () => {
     const savedVitest = process.env.VITEST;
+    const savedAiStudio = process.env.AI_STUDIO;
     try {
       process.env.VITEST = 'false';
+      process.env.AI_STUDIO = 'true';
       const result = await runWithTimeout('echo "success"', 5000, 'my-git-worktree-project');
       // Since directory does not exist, it should return 'Directory ... does not exist.'
       assert.strictEqual(result.stdout, '');
       assert.match(result.stderr, /Directory my-git-worktree-project does not exist/);
     } finally {
       process.env.VITEST = savedVitest;
+      process.env.AI_STUDIO = savedAiStudio;
     }
   });
 });
