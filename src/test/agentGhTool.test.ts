@@ -296,6 +296,10 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
       const res3 = await tool.handler!({ args: ['issue', 'comment', '42', '--body-file=path/to/file'] }, mockContext) as RunGhCommandResult;
       assert.strictEqual(res3.output, undefined);
       assert.match(res3.error || '', /reading from files via --body-file\/-F is forbidden/);
+
+      const res4 = await tool.handler!({ args: ['issue', 'comment', '42', '-F.env'] }, mockContext) as RunGhCommandResult;
+      assert.strictEqual(res4.output, undefined);
+      assert.match(res4.error || '', /reading from files via --body-file\/-F is forbidden/);
     });
 
     it('should reject comments exceeding maximum length', async () => {

@@ -283,7 +283,7 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
 
       // 5. Parameter security check: --body-file / -F (no local file access)
       const hasBodyFileArg = args.some((arg) =>
-        arg === '--body-file' || arg.startsWith('--body-file=') || arg === '-F'
+        arg === '--body-file' || arg.startsWith('--body-file=') || arg.startsWith('-F')
       );
       if (hasBodyFileArg) {
         const message = 'Rejected: reading from files via --body-file/-F is forbidden. Use --body/-b instead.';
