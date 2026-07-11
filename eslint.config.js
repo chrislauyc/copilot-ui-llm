@@ -29,6 +29,9 @@ export default [
       "@typescript-eslint": tsPlugin
     },
     rules: {
+      // Set to "warn" to avoid breaking the build on pre-existing legacy files.
+      // The custom check-explicit-any script enforces a strict ratchet check on PRs,
+      // blocking any new violations from being introduced in orchestrator and SDK files.
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/ban-ts-comment": "warn"
     }
