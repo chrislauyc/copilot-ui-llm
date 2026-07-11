@@ -1,58 +1,6 @@
-import { execSync } from 'node:child_process';
 import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
-
-const safeRefRegex = /^[a-zA-Z0-9._\-\/]+$/;
-
-// Try to fetch the base branch if we are in a GitHub Actions environment
-if (process.env.GITHUB_ACTIONS === 'true') {
-  const baseRef = process.env.GITHUB_BASE_REF || 'main';
-  if (safeRefRegex.test(baseRef)) {
-    console.log(`GitHub Actions detected. Fetching base branch: ${baseRef}...`);
-    try {
-      // Attempt to unshallow the current repository clone first so git has history
-      try {
-        execSync('git fetch --unshallow', { stdio: 'ignore' });
-      } catch {
-        // already unshallow or failed
-      }
-      execSync(`git fetch origin ${baseRef} --depth=100`, { stdio: 'inherit' });
-    } catch (err) {
-      console.warn(`Failed to fetch origin ${baseRef}:`, err);
-    }
-  } else {
-    console.warn(`Invalid GITHUB_BASE_REF: "${baseRef}"`);
-  }
-}
-
-function getBaseRef(): string | null {
-  if (process.env.GITHUB_BASE_REF) {
-    const baseRef = process.env.GITHUB_BASE_REF;
-    if (safeRefRegex.test(baseRef)) {
-      const prBase = `origin/${baseRef}`;
-      try {
-        execSync(`git rev-parse --verify ${prBase}`, { stdio: 'ignore' });
-        return prBase;
-      } catch {}
-    }
-  }
-  for (const ref of ['origin/main', 'main', 'origin/master', 'master']) {
-    try {
-      execSync(`git rev-parse --verify ${ref}`, { stdio: 'ignore' });
-      return ref;
-    } catch {
-      // ignore
-    }
-  }
-  return null;
-}
-
-interface EslintDirective {
-  type: 'disable' | 'enable' | 'disable-next-line' | 'disable-line';
-  rules: string[];
-  line: number;
-}
 
 interface Violation {
   file: string;
@@ -61,41 +9,10 @@ interface Violation {
   reason: string;
 }
 
-function getAddedLines(diffOutput: string): Record<string, Set<number>> {
-  const addedLinesPerFile: Record<string, Set<number>> = {};
-  const lines = diffOutput.split('\n');
-  let currentFile = 'unknown';
-  let currentLineNumber = 0;
-
-  for (const line of lines) {
-    if (line.startsWith('+++ b/')) {
-      currentFile = line.slice(6);
-      addedLinesPerFile[currentFile] = new Set<number>();
-      continue;
-    }
-    if (line.startsWith('@@ ')) {
-      // Hunk header: @@ -oldStart,oldLength +newStart,newLength @@
-      const match = line.match(/^\s*@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/);
-      if (match && match[1]) {
-        currentLineNumber = parseInt(match[1], 10);
-      }
-      continue;
-    }
-    if (line.startsWith('\\')) {
-      continue;
-    }
-    if (line.startsWith('+')) {
-      const currentSet = currentFile ? addedLinesPerFile[currentFile] : undefined;
-      if (currentSet) {
-        currentSet.add(currentLineNumber);
-      }
-      currentLineNumber++;
-    } else if (line.startsWith(' ')) {
-      currentLineNumber++;
-    }
-  }
-
-  return addedLinesPerFile;
+interface EslintDirective {
+  type: 'disable' | 'enable' | 'disable-line' | 'disable-next-line';
+  rules: string[];
+  line: number;
 }
 
 function isViolationDisabled(line: number, rule: string, directives: EslintDirective[]): boolean {
@@ -106,9 +23,7 @@ function isViolationDisabled(line: number, rule: string, directives: EslintDirec
     if (dir.line > line) {
       break;
     }
-
     const coversRule = dir.rules.length === 0 || dir.rules.includes(rule);
-
     if (dir.type === 'disable') {
       if (coversRule) {
         isBlockDisabled = true;
@@ -147,7 +62,7 @@ function isViolationDisabled(line: number, rule: string, directives: EslintDirec
   return false;
 }
 
-function checkFileForViolations(filePath: string, addedLines: Set<number>): Violation[] {
+function checkFileForViolations(filePath: string): Violation[] {
   const violations: Violation[] = [];
 
   if (!fs.existsSync(filePath)) {
@@ -249,16 +164,14 @@ function checkFileForViolations(filePath: string, addedLines: Set<number>): Viol
   for (const comment of commentRanges) {
     const commentText = comment.text;
     if (/@ts-(?:ignore|expect-error)\b/.test(commentText)) {
-      if (addedLines.has(comment.line)) {
-        const rule = '@typescript-eslint/ban-ts-comment';
-        if (!isViolationDisabled(comment.line, rule, eslintDirectives)) {
-          violations.push({
-            file: filePath,
-            line: comment.line,
-            lineContent: fileLines[comment.line - 1]?.trim() || '',
-            reason: 'Usage of @ts-ignore or @ts-expect-error is forbidden by the type discipline guide.'
-          });
-        }
+      const rule = '@typescript-eslint/ban-ts-comment';
+      if (!isViolationDisabled(comment.line, rule, eslintDirectives)) {
+        violations.push({
+          file: filePath,
+          line: comment.line,
+          lineContent: fileLines[comment.line - 1]?.trim() || '',
+          reason: 'Usage of @ts-ignore or @ts-expect-error is forbidden by the type discipline guide.'
+        });
       }
     }
   }
@@ -269,16 +182,14 @@ function checkFileForViolations(filePath: string, addedLines: Set<number>): Viol
       const startPos = node.getStart(sourceFile);
       const line = getLineNumber(startPos);
 
-      if (addedLines.has(line)) {
-        const rule = '@typescript-eslint/no-explicit-any';
-        if (!isViolationDisabled(line, rule, eslintDirectives)) {
-          violations.push({
-            file: filePath,
-            line,
-            lineContent: fileLines[line - 1]?.trim() || '',
-            reason: 'New explicit "any" type usage is forbidden in orchestrator/SDK paths.'
-          });
-        }
+      const rule = '@typescript-eslint/no-explicit-any';
+      if (!isViolationDisabled(line, rule, eslintDirectives)) {
+        violations.push({
+          file: filePath,
+          line,
+          lineContent: fileLines[line - 1]?.trim() || '',
+          reason: 'Explicit "any" type usage is forbidden in orchestrator/SDK paths.'
+        });
       }
     }
     ts.forEachChild(node, visitAny);
@@ -289,60 +200,53 @@ function checkFileForViolations(filePath: string, addedLines: Set<number>): Viol
   return violations;
 }
 
-function main() {
-  console.log('=== Checking for new explicit "any", @ts-ignore, or @ts-expect-error in src/orchestrator or src/copilotSdk ===');
-
-  let diff = '';
-  const baseRef = getBaseRef();
-
-  if (baseRef) {
-    try {
-      console.log(`Finding merge base between ${baseRef} and HEAD...`);
-      const mergeBase = execSync(`git merge-base ${baseRef} HEAD`, { encoding: 'utf8' }).trim();
-      console.log(`Comparing current state against merge base ${mergeBase} (from ${baseRef})...`);
-      diff = execSync(`git diff ${mergeBase} -- 'src/orchestrator' 'src/copilotSdk'`, { encoding: 'utf8' });
-    } catch {
-      console.warn('Failed to get diff against merge base, trying direct diff against base ref...');
-      try {
-        diff = execSync(`git diff ${baseRef} -- 'src/orchestrator' 'src/copilotSdk'`, { encoding: 'utf8' });
-      } catch {
-        console.warn('Failed to get diff against base ref, falling back to local diff against HEAD.');
-        try {
-          diff = execSync(`git diff HEAD -- 'src/orchestrator' 'src/copilotSdk'`, { encoding: 'utf8' });
-        } catch {
-          // ignore
-        }
-      }
+function walkDir(dir: string): string[] {
+  let results: string[] = [];
+  const list = fs.readdirSync(dir);
+  for (const file of list) {
+    const filePath = path.join(dir, file);
+    const stat = fs.statSync(filePath);
+    if (stat && stat.isDirectory()) {
+      results = results.concat(walkDir(filePath));
+    } else if (filePath.endsWith('.ts') || filePath.endsWith('.tsx')) {
+      results.push(filePath);
     }
-  } else {
-    console.log('No base branch found. Checking uncommitted/local changes against HEAD.');
-    try {
-      diff = execSync(`git diff HEAD -- 'src/orchestrator' 'src/copilotSdk'`, { encoding: 'utf8' });
-    } catch {
-      // ignore
+  }
+  return results;
+}
+
+function main() {
+  console.log('=== Checking for explicit "any", @ts-ignore, or @ts-expect-error in src/orchestrator or src/copilotSdk ===');
+
+  const targetDirs = [
+    path.join(process.cwd(), 'src', 'orchestrator'),
+    path.join(process.cwd(), 'src', 'copilotSdk')
+  ];
+
+  const filesToCheck: string[] = [];
+  for (const dir of targetDirs) {
+    if (fs.existsSync(dir)) {
+      filesToCheck.push(...walkDir(dir));
     }
   }
 
-  if (!diff.trim()) {
-    console.log('✅ No changes detected in target paths.');
+  if (filesToCheck.length === 0) {
+    console.log('✅ No target files found.');
     process.exit(0);
   }
 
-  const addedLinesPerFile = getAddedLines(diff);
   const violations: Violation[] = [];
 
-  for (const [file, addedLines] of Object.entries(addedLinesPerFile)) {
-    if (addedLines.size === 0) {
-      continue;
-    }
-    const fileViolations = checkFileForViolations(file, addedLines);
+  for (const file of filesToCheck) {
+    const fileViolations = checkFileForViolations(file);
     violations.push(...fileViolations);
   }
 
   if (violations.length > 0) {
-    console.error('\n❌ ERROR: Type discipline violations introduced in src/orchestrator or src/copilotSdk paths:\n');
+    console.error('\n❌ ERROR: Type discipline violations found in src/orchestrator or src/copilotSdk paths:\n');
     for (const violation of violations) {
-      console.error(`  File: ${violation.file}`);
+      const relPath = path.relative(process.cwd(), violation.file);
+      console.error(`  File: ${relPath}`);
       console.error(`  Line ${violation.line}: ${violation.lineContent}`);
       console.error(`  Reason: ${violation.reason}\n`);
     }
@@ -350,7 +254,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log('✅ No new explicit "any" or banned TS comments detected in target paths.');
+  console.log('✅ No explicit "any" or banned TS comments detected in target paths.');
   process.exit(0);
 }
 

@@ -145,7 +145,7 @@ export async function getOrCreateSession(
       existing = {
         ...stored,
         sessionId,
-        copilotSession: null as any,
+        copilotSession: null as any, // eslint-disable-line @typescript-eslint/no-explicit-any
         currentModel: stored.currentModel || 'gemini-3.1-flash-lite',
         cwd: stored.cwd || getWorkspaceRoot(),
         lastUsedAt: stored.lastUsedAt || now,
