@@ -1,4 +1,7 @@
 import { execSync } from 'node:child_process';
+import ts from 'typescript';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const safeRefRegex = /^[a-zA-Z0-9._\-\/]+$/;
 
@@ -34,7 +37,6 @@ function getBaseRef(): string | null {
       } catch {}
     }
   }
-
   for (const ref of ['origin/main', 'main', 'origin/master', 'master']) {
     try {
       execSync(`git rev-parse --verify ${ref}`, { stdio: 'ignore' });
@@ -46,72 +48,243 @@ function getBaseRef(): string | null {
   return null;
 }
 
-function stripStringAndRegexLiterals(line: string): string {
-  let cleaned = line;
-  // Strip string literals: "...", '...', `...`
-  cleaned = cleaned.replace(/"(?:\\.|[^"\\])*"/g, '');
-  cleaned = cleaned.replace(/'(?:\\.|[^'\\])*'/g, '');
-  cleaned = cleaned.replace(/`/g, ''); // Simplified backtick removal
-  // Strip regex literals
-  cleaned = cleaned.replace(/\/(?![*\/])(?:\\.|[^\/\\])+\/[gimsuy]*/g, '');
-  return cleaned;
+interface EslintDirective {
+  type: 'disable' | 'enable' | 'disable-next-line' | 'disable-line';
+  rules: string[];
+  line: number;
 }
 
-function cleanCodeLine(line: string): string {
-  // Strip single-line comments (starting with //)
-  let cleaned = line.replace(/\/\/.*$/g, '');
-
-  // Strip multi-line comments in a single line (like /* ... */)
-  cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
-
-  // Strip string/regex literals
-  cleaned = stripStringAndRegexLiterals(cleaned);
-
-  return cleaned;
+interface Violation {
+  file: string;
+  line: number;
+  lineContent: string;
+  reason: string;
 }
 
-const bannedTsCommentRegex = /(?:\/\/|\/\*|^\s*\*)\s*@ts-(?:ignore|expect-error)\b/;
+function getAddedLines(diffOutput: string): Record<string, Set<number>> {
+  const addedLinesPerFile: Record<string, Set<number>> = {};
+  const lines = diffOutput.split('\n');
+  let currentFile = 'unknown';
+  let currentLineNumber = 0;
 
-function isCommentLine(trimmed: string): boolean {
-  // Do not ignore comment lines if they contain the banned directives
-  if (bannedTsCommentRegex.test(trimmed)) {
-    return false;
+  for (const line of lines) {
+    if (line.startsWith('+++ b/')) {
+      currentFile = line.slice(6);
+      addedLinesPerFile[currentFile] = new Set<number>();
+      continue;
+    }
+    if (line.startsWith('@@ ')) {
+      // Hunk header: @@ -oldStart,oldLength +newStart,newLength @@
+      const match = line.match(/^\s*@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+      if (match) {
+        currentLineNumber = parseInt(match[1], 10);
+      }
+      continue;
+    }
+    if (line.startsWith('\\')) {
+      continue;
+    }
+    if (line.startsWith('+')) {
+      if (addedLinesPerFile[currentFile]) {
+        addedLinesPerFile[currentFile].add(currentLineNumber);
+      }
+      currentLineNumber++;
+    } else if (line.startsWith(' ')) {
+      currentLineNumber++;
+    }
   }
-  // Do not ignore comment lines if they contain eslint-disable comments,
-  // so that we can process their disable/enable state in the main loop.
-  if (trimmed.includes('eslint-disable')) {
-    return false;
+
+  return addedLinesPerFile;
+}
+
+function isViolationDisabled(line: number, rule: string, directives: EslintDirective[]): boolean {
+  let isBlockDisabled = false;
+  const sortedDirectives = [...directives].sort((a, b) => a.line - b.line);
+
+  for (const dir of sortedDirectives) {
+    if (dir.line > line) {
+      break;
+    }
+
+    const coversRule = dir.rules.length === 0 || dir.rules.includes(rule);
+
+    if (dir.type === 'disable') {
+      if (coversRule) {
+        isBlockDisabled = true;
+      }
+    } else if (dir.type === 'enable') {
+      if (coversRule) {
+        isBlockDisabled = false;
+      }
+    }
   }
-  // Single line comments
-  if (trimmed.startsWith('//')) return true;
-  // Block comment start or end
-  if (trimmed.startsWith('/*') || trimmed.startsWith('*/')) return true;
-  // JSDoc / block comment continuation line
-  if (trimmed === '*' || trimmed.startsWith('* ')) return true;
+
+  if (isBlockDisabled) {
+    return true;
+  }
+
+  const hasDisableNextLine = directives.some(dir =>
+    dir.type === 'disable-next-line' &&
+    dir.line === line - 1 &&
+    (dir.rules.length === 0 || dir.rules.includes(rule))
+  );
+
+  if (hasDisableNextLine) {
+    return true;
+  }
+
+  const hasDisableLine = directives.some(dir =>
+    dir.type === 'disable-line' &&
+    dir.line === line &&
+    (dir.rules.length === 0 || dir.rules.includes(rule))
+  );
+
+  if (hasDisableLine) {
+    return true;
+  }
+
   return false;
 }
 
-function updateBlockCommentState(line: string, currentState: boolean): boolean {
-  let inComment = currentState;
-  let pos = 0;
-  while (pos < line.length) {
-    if (!inComment) {
-      const startIdx = line.indexOf('/*', pos);
-      if (startIdx === -1) {
-        break;
+function checkFileForViolations(filePath: string, addedLines: Set<number>): Violation[] {
+  const violations: Violation[] = [];
+
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const fileLines = content.split('\n');
+
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    content,
+    ts.ScriptTarget.Latest,
+    true
+  );
+
+  function getLineNumber(pos: number): number {
+    return sourceFile.getLineAndCharacterOfPosition(pos).line + 1;
+  }
+
+  // 1. Gather all unique comment ranges in the file using leading/trailing trivia
+  interface CommentRangeInfo {
+    text: string;
+    pos: number;
+    end: number;
+    line: number;
+  }
+
+  const commentKeys = new Set<string>();
+  const commentRanges: CommentRangeInfo[] = [];
+
+  function visitComments(node: ts.Node) {
+    const leading = ts.getLeadingCommentRanges(content, node.pos);
+    if (leading) {
+      for (const r of leading) {
+        const key = `${r.pos}-${r.end}`;
+        if (!commentKeys.has(key)) {
+          commentKeys.add(key);
+          commentRanges.push({
+            text: content.substring(r.pos, r.end),
+            pos: r.pos,
+            end: r.end,
+            line: getLineNumber(r.pos)
+          });
+        }
       }
-      inComment = true;
-      pos = startIdx + 2;
-    } else {
-      const endIdx = line.indexOf('*/', pos);
-      if (endIdx === -1) {
-        break;
+    }
+
+    const trailing = ts.getTrailingCommentRanges(content, node.end);
+    if (trailing) {
+      for (const r of trailing) {
+        const key = `${r.pos}-${r.end}`;
+        if (!commentKeys.has(key)) {
+          commentKeys.add(key);
+          commentRanges.push({
+            text: content.substring(r.pos, r.end),
+            pos: r.pos,
+            end: r.end,
+            line: getLineNumber(r.pos)
+          });
+        }
       }
-      inComment = false;
-      pos = endIdx + 2;
+    }
+
+    ts.forEachChild(node, visitComments);
+  }
+
+  visitComments(sourceFile);
+
+  // 2. Parse eslint directives from the gathered comments
+  const eslintDirectives: EslintDirective[] = [];
+  for (const comment of commentRanges) {
+    const commentText = comment.text;
+    if (commentText.includes('eslint-disable') || commentText.includes('eslint-enable')) {
+      let type: EslintDirective['type'] = 'disable';
+      if (commentText.includes('eslint-disable-next-line')) {
+        type = 'disable-next-line';
+      } else if (commentText.includes('eslint-disable-line')) {
+        type = 'disable-line';
+      } else if (commentText.includes('eslint-enable')) {
+        type = 'enable';
+      }
+
+      const directiveWord = type === 'disable-next-line' ? 'eslint-disable-next-line' :
+                            type === 'disable-line' ? 'eslint-disable-line' :
+                            type === 'disable' ? 'eslint-disable' : 'eslint-enable';
+
+      const idx = commentText.indexOf(directiveWord);
+      const remaining = commentText.substring(idx + directiveWord.length).trim();
+      const cleanLine = remaining.split('\n')[0].replace(/\*\//g, '').trim();
+      const rules = cleanLine ? cleanLine.split(',').map(r => r.trim()).filter(Boolean) : [];
+
+      eslintDirectives.push({ type, rules, line: comment.line });
     }
   }
-  return inComment;
+
+  // 3. Check gathered comments for @ts-ignore / @ts-expect-error
+  for (const comment of commentRanges) {
+    const commentText = comment.text;
+    if (/@ts-(?:ignore|expect-error)\b/.test(commentText)) {
+      if (addedLines.has(comment.line)) {
+        const rule = '@typescript-eslint/ban-ts-comment';
+        if (!isViolationDisabled(comment.line, rule, eslintDirectives)) {
+          violations.push({
+            file: filePath,
+            line: comment.line,
+            lineContent: fileLines[comment.line - 1]?.trim() || '',
+            reason: 'Usage of @ts-ignore or @ts-expect-error is forbidden by the type discipline guide.'
+          });
+        }
+      }
+    }
+  }
+
+  // 4. Traverse AST to find explicit 'any' (AnyKeyword nodes)
+  function visitAny(node: ts.Node) {
+    if (node.kind === ts.SyntaxKind.AnyKeyword) {
+      const startPos = node.getStart(sourceFile);
+      const line = getLineNumber(startPos);
+
+      if (addedLines.has(line)) {
+        const rule = '@typescript-eslint/no-explicit-any';
+        if (!isViolationDisabled(line, rule, eslintDirectives)) {
+          violations.push({
+            file: filePath,
+            line,
+            lineContent: fileLines[line - 1]?.trim() || '',
+            reason: 'New explicit "any" type usage is forbidden in orchestrator/SDK paths.'
+          });
+        }
+      }
+    }
+    ts.forEachChild(node, visitAny);
+  }
+
+  visitAny(sourceFile);
+
+  return violations;
 }
 
 function main() {
@@ -153,149 +326,22 @@ function main() {
     process.exit(0);
   }
 
-  const lines = diff.split('\n');
-  const violations: { file: string; lineContent: string; reason: string }[] = [];
-  let currentFile = 'unknown';
+  const addedLinesPerFile = getAddedLines(diff);
+  const violations: Violation[] = [];
 
-  let ignoreNextExplicitAny = false;
-  let ignoreNextBanTsComment = false;
-  let blockDisableAny = false;
-  let blockDisableTsComment = false;
-  let inBlockComment = false;
-
-  for (const line of lines) {
-    if (line.startsWith('+++ b/')) {
-      currentFile = line.slice(6);
-      ignoreNextExplicitAny = false;
-      ignoreNextBanTsComment = false;
-      blockDisableAny = false;
-      blockDisableTsComment = false;
-      inBlockComment = false;
+  for (const [file, addedLines] of Object.entries(addedLinesPerFile)) {
+    if (addedLines.size === 0) {
       continue;
     }
-
-    if (line.startsWith('@@ ')) {
-      // Hunk boundary - reset inBlockComment because the hunk context is disjoint
-      inBlockComment = false;
-      continue;
-    }
-
-    if (!line.startsWith('+') && !line.startsWith('-') && !line.startsWith(' ')) {
-      continue;
-    }
-
-    const prefix = line[0];
-    const content = line.slice(1);
-    const trimmed = content.trim();
-
-    // 1. Maintain block comment state and block disables across all added/context lines
-    if (prefix === '+' || prefix === ' ') {
-      inBlockComment = updateBlockCommentState(content, inBlockComment);
-
-      // Check block disables / enables
-      if (content.includes('eslint-disable') && !content.includes('eslint-disable-next-line') && !content.includes('eslint-disable-line')) {
-        const hasNoSpecifics = !content.includes('@typescript-eslint/');
-        if (hasNoSpecifics || content.includes('@typescript-eslint/no-explicit-any')) {
-          blockDisableAny = true;
-        }
-        if (hasNoSpecifics || content.includes('@typescript-eslint/ban-ts-comment')) {
-          blockDisableTsComment = true;
-        }
-      } else if (content.includes('eslint-enable')) {
-        const hasNoSpecifics = !content.includes('@typescript-eslint/');
-        if (hasNoSpecifics || content.includes('@typescript-eslint/no-explicit-any')) {
-          blockDisableAny = false;
-        }
-        if (hasNoSpecifics || content.includes('@typescript-eslint/ban-ts-comment')) {
-          blockDisableTsComment = false;
-        }
-      }
-    }
-
-    // 2. Perform violation checks only on newly added lines ('+')
-    if (prefix === '+') {
-      // Check if this line has a disable comment for subsequent lines (eslint-disable-next-line)
-      let hasDisableAny = false;
-      let hasDisableTsComment = false;
-
-      if (content.includes('eslint-disable-next-line')) {
-        if (content.includes('@typescript-eslint/no-explicit-any')) {
-          hasDisableAny = true;
-        }
-        if (content.includes('@typescript-eslint/ban-ts-comment')) {
-          hasDisableTsComment = true;
-        }
-      }
-
-      // Check if this line itself has an eslint-disable-line or inline eslint-disable
-      const isLineAnyDisabled = (content.includes('eslint-disable-line') || content.includes('eslint-disable')) && 
-                                content.includes('@typescript-eslint/no-explicit-any');
-      const isLineTsCommentDisabled = (content.includes('eslint-disable-line') || content.includes('eslint-disable')) && 
-                                      content.includes('@typescript-eslint/ban-ts-comment');
-
-      const shouldIgnoreAny = ignoreNextExplicitAny || isLineAnyDisabled || blockDisableAny;
-      const shouldIgnoreTsComment = ignoreNextBanTsComment || isLineTsCommentDisabled || blockDisableTsComment;
-
-      // Reset the "next-line" flags for the following lines, but set them now if this line is a disable-next-line
-      ignoreNextExplicitAny = hasDisableAny;
-      ignoreNextBanTsComment = hasDisableTsComment;
-
-      // If the line is classified as a standard comment line (and is not an eslint disable directive or does not contain @ts-ignore), ignore it.
-      if (isCommentLine(trimmed)) {
-        continue;
-      }
-
-      // If we are currently in a multi-line block comment, skip any regular check (e.g. 'any')
-      // but still check for @ts-ignore or @ts-expect-error
-      if (inBlockComment) {
-        const literalsStripped = stripStringAndRegexLiterals(content);
-        if (bannedTsCommentRegex.test(literalsStripped)) {
-          if (!shouldIgnoreTsComment) {
-            violations.push({
-              file: currentFile,
-              lineContent: trimmed,
-              reason: 'Usage of @ts-ignore or @ts-expect-error is forbidden by the type discipline guide.'
-            });
-          }
-        }
-        continue;
-      }
-
-      // 1. Strip string/regex literals first to avoid false positives inside literals
-      const literalsStripped = stripStringAndRegexLiterals(content);
-
-      // 2. Check for @ts-ignore or @ts-expect-error in the stripped content
-      if (bannedTsCommentRegex.test(literalsStripped)) {
-        if (!shouldIgnoreTsComment) {
-          violations.push({
-            file: currentFile,
-            lineContent: trimmed,
-            reason: 'Usage of @ts-ignore or @ts-expect-error is forbidden by the type discipline guide.'
-          });
-        }
-        continue;
-      }
-
-      // 3. Strip comments and strings before checking for 'any'
-      const cleaned = cleanCodeLine(content);
-
-      if (/\bany\b/.test(cleaned)) {
-        if (!shouldIgnoreAny) {
-          violations.push({
-            file: currentFile,
-            lineContent: trimmed,
-            reason: 'New explicit "any" type usage is forbidden in orchestrator/SDK paths.'
-          });
-        }
-      }
-    }
+    const fileViolations = checkFileForViolations(file, addedLines);
+    violations.push(...fileViolations);
   }
 
   if (violations.length > 0) {
     console.error('\n❌ ERROR: Type discipline violations introduced in src/orchestrator or src/copilotSdk paths:\n');
     for (const violation of violations) {
       console.error(`  File: ${violation.file}`);
-      console.error(`  Line: ${violation.lineContent}`);
+      console.error(`  Line ${violation.line}: ${violation.lineContent}`);
       console.error(`  Reason: ${violation.reason}\n`);
     }
     console.error('Please specify a more specific type instead of "any", or use "unknown" or "eslint-disable-next-line @typescript-eslint/no-explicit-any" if absolutely necessary.\n');
