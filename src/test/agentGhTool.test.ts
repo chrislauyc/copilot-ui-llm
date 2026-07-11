@@ -5,8 +5,11 @@ import {
   isAllowedGhCommand,
   isBranchNameAssociatedWithIssue,
   extractTargetId,
+  extractTargetIdFromArgs,
+  isPrLinkedToIssue,
   createRunGhCommandTool,
   cachedPrNumbersByIssue,
+  cachedPrLinkedStatus,
   type RunGhCommandResult,
 } from '../../scripts/tools/agentGhTool';
 
@@ -92,6 +95,111 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
     });
   });
 
+  describe('extractTargetIdFromArgs', () => {
+    it('should extract target ID while skipping options and flags', () => {
+      assert.strictEqual(extractTargetIdFromArgs(['pr', 'view', '--json', 'title,number', '101']), '101');
+      assert.strictEqual(extractTargetIdFromArgs(['pr', 'view', '101', '--json', 'title']), '101');
+      assert.strictEqual(extractTargetIdFromArgs(['issue', 'comment', '--body', 'test comment', '42']), '42');
+      assert.strictEqual(extractTargetIdFromArgs(['issue', 'comment', '42', '--body', 'test comment']), '42');
+    });
+
+    it('should return null if no valid target ID is found', () => {
+      assert.strictEqual(extractTargetIdFromArgs(['pr', 'list']), null);
+      assert.strictEqual(extractTargetIdFromArgs(['issue', 'view', '--json', 'title']), null);
+    });
+  });
+
+  describe('isPrLinkedToIssue', () => {
+    beforeEach(() => {
+      for (const key in cachedPrLinkedStatus) {
+        delete cachedPrLinkedStatus[key];
+      }
+      vi.clearAllMocks();
+    });
+
+    it('should return true when git remote and gh api match', () => {
+      vi.mocked(execFileSync).mockImplementation((cmd, args) => {
+        if (cmd === 'git') {
+          return 'https://github.com/owner/repo.git\n';
+        }
+        if (cmd === 'gh' && args?.[0] === 'api') {
+          return JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  closingIssuesReferences: {
+                    nodes: [{ number: 42 }]
+                  }
+                }
+              }
+            }
+          });
+        }
+        return '';
+      });
+
+      const result = isPrLinkedToIssue('101', '42');
+      assert.strictEqual(result, true);
+    });
+
+    it('should cache results to prevent redundant calls', () => {
+      let callCount = 0;
+      vi.mocked(execFileSync).mockImplementation((cmd, args) => {
+        if (cmd === 'git') {
+          return 'https://github.com/owner/repo.git\n';
+        }
+        if (cmd === 'gh' && args?.[0] === 'api') {
+          callCount++;
+          return JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  closingIssuesReferences: {
+                    nodes: [{ number: 42 }]
+                  }
+                }
+              }
+            }
+          });
+        }
+        return '';
+      });
+
+      const first = isPrLinkedToIssue('101', '42');
+      const second = isPrLinkedToIssue('101', '42');
+      assert.strictEqual(first, true);
+      assert.strictEqual(second, true);
+      assert.strictEqual(callCount, 1); // Second call should be cached
+    });
+
+    it('should return false if git remote fails', () => {
+      vi.mocked(execFileSync).mockImplementation((cmd) => {
+        if (cmd === 'git') {
+          throw new Error('git fail');
+        }
+        return '';
+      });
+
+      const result = isPrLinkedToIssue('101', '42');
+      assert.strictEqual(result, false);
+    });
+
+    it('should return false if gh api fails', () => {
+      vi.mocked(execFileSync).mockImplementation((cmd) => {
+        if (cmd === 'git') {
+          return 'https://github.com/owner/repo.git\n';
+        }
+        if (cmd === 'gh') {
+          throw new Error('gh fail');
+        }
+        return '';
+      });
+
+      const result = isPrLinkedToIssue('101', '42');
+      assert.strictEqual(result, false);
+    });
+  });
+
   describe('createRunGhCommandTool handler checks', () => {
     let originalIssueNumber: string | undefined;
 
@@ -102,6 +210,9 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
       for (const key in cachedPrNumbersByIssue) {
         delete cachedPrNumbersByIssue[key];
       }
+      for (const key in cachedPrLinkedStatus) {
+        delete cachedPrLinkedStatus[key];
+      }
       vi.clearAllMocks();
     });
 
@@ -109,7 +220,7 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
       process.env.ISSUE_NUMBER = originalIssueNumber;
     });
 
-    it('should enforce call budget and reject after 10 calls', async () => {
+    it('should enforce success and attempt budgets', async () => {
       const tool = createRunGhCommandTool();
       vi.mocked(execFileSync).mockReturnValue('mock success output');
 
@@ -120,10 +231,27 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
         assert.strictEqual(res.error, undefined);
       }
 
-      // 11th call should be rejected
+      // 11th call should be rejected on success budget
       const res = await tool.handler!({ args: ['issue', 'view', '42'] }, mockContext) as RunGhCommandResult;
       assert.strictEqual(res.output, undefined);
-      assert.match(res.error || '', /maximum tool call budget of 10 exceeded/);
+      assert.match(res.error || '', /maximum tool call success budget of 10 exceeded/);
+    });
+
+    it('should enforce attempt budget even for rejected calls', async () => {
+      const tool = createRunGhCommandTool();
+      vi.mocked(execFileSync).mockReturnValue('mock success');
+
+      // Make 20 failed/rejected attempts (e.g. disallowed subcommand)
+      for (let i = 0; i < 20; i++) {
+        const res = await tool.handler!({ args: ['issue', 'delete', '42'] }, mockContext) as RunGhCommandResult;
+        assert.strictEqual(res.output, undefined);
+        assert.match(res.error || '', /not on the allowlist/);
+      }
+
+      // 21st attempt should be rejected due to overall attempts budget
+      const res = await tool.handler!({ args: ['issue', 'view', '42'] }, mockContext) as RunGhCommandResult;
+      assert.strictEqual(res.output, undefined);
+      assert.match(res.error || '', /maximum tool call attempt budget of 20 exceeded/);
     });
 
     it('should reject malformed or too short arguments', async () => {
@@ -142,7 +270,6 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
 
     it('should reject commands containing --repo or -R flags', async () => {
       const tool = createRunGhCommandTool();
-
       const res1 = await tool.handler!({ args: ['issue', 'view', '42', '--repo', 'other/repo'] }, mockContext) as RunGhCommandResult;
       assert.strictEqual(res1.output, undefined);
       assert.match(res1.error || '', /cross-repo access is forbidden/);
@@ -158,7 +285,6 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
 
     it('should reject commands containing --body-file or -F flags', async () => {
       const tool = createRunGhCommandTool();
-
       const res1 = await tool.handler!({ args: ['issue', 'comment', '42', '--body-file', 'path/to/file'] }, mockContext) as RunGhCommandResult;
       assert.strictEqual(res1.output, undefined);
       assert.match(res1.error || '', /reading from files via --body-file\/-F is forbidden/);
@@ -172,9 +298,24 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
       assert.match(res3.error || '', /reading from files via --body-file\/-F is forbidden/);
     });
 
+    it('should reject comments exceeding maximum length', async () => {
+      const tool = createRunGhCommandTool();
+      const longComment = 'a'.repeat(10001);
+      const res = await tool.handler!({ args: ['issue', 'comment', '42', '--body', longComment] }, mockContext) as RunGhCommandResult;
+      assert.strictEqual(res.output, undefined);
+      assert.match(res.error || '', /comment body is too long/);
+    });
+
+    it('should reject comments containing HTML script/iframe injections', async () => {
+      const tool = createRunGhCommandTool();
+      const maliciousComment = 'Hello <script>alert(1)</script> world';
+      const res = await tool.handler!({ args: ['issue', 'comment', '42', '--body', maliciousComment] }, mockContext) as RunGhCommandResult;
+      assert.strictEqual(res.output, undefined);
+      assert.match(res.error || '', /contains potential HTML script\/iframe injections/);
+    });
+
     it('should enforce target issue ID matches triggering issue number', async () => {
       const tool = createRunGhCommandTool();
-
       // Target issue #42 is allowed (matches triggering issue #42)
       vi.mocked(execFileSync).mockReturnValue('mock view success');
       const resAllowed = await tool.handler!({ args: ['issue', 'view', '42'] }, mockContext) as RunGhCommandResult;
@@ -188,7 +329,6 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
 
     it('should permit PR if associated branch name matches triggering issue', async () => {
       const tool = createRunGhCommandTool();
-
       // Mock "gh pr list" to return a PR with matching branch
       vi.mocked(execFileSync).mockImplementation((cmd, args) => {
         if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
@@ -203,15 +343,27 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
 
     it('should permit PR if linked directly to triggering issue', async () => {
       const tool = createRunGhCommandTool();
-
       vi.mocked(execFileSync).mockImplementation((cmd, args) => {
+        if (cmd === 'git') {
+          return 'https://github.com/owner/repo.git\n';
+        }
         if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
           return JSON.stringify([]); // No PRs found via branch name
         }
+        if (cmd === 'gh' && args?.[0] === 'api') {
+          return JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  closingIssuesReferences: {
+                    nodes: [{ number: 42 }]
+                  }
+                }
+              }
+            }
+          });
+        }
         if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'view' && args?.[2] === '101') {
-          if (args.includes('--json')) {
-            return JSON.stringify({ issues: [{ number: 42 }] }); // Linked to issue 42
-          }
           return 'mock pr view output';
         }
         return '';
@@ -223,16 +375,25 @@ describe('GitHub CLI Agent Tool (agentGhTool) Verification Tests', () => {
 
     it('should reject PR if neither branch name matches nor linked directly', async () => {
       const tool = createRunGhCommandTool();
-
       vi.mocked(execFileSync).mockImplementation((cmd, args) => {
+        if (cmd === 'git') {
+          return 'https://github.com/owner/repo.git\n';
+        }
         if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
           return JSON.stringify([]);
         }
-        if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'view' && args?.[2] === '101') {
-          if (args.includes('--json')) {
-            return JSON.stringify({ issues: [{ number: 999 }] }); // Linked to a different issue
-          }
-          return 'mock pr view output';
+        if (cmd === 'gh' && args?.[0] === 'api') {
+          return JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  closingIssuesReferences: {
+                    nodes: [{ number: 999 }]
+                  }
+                }
+              }
+            }
+          });
         }
         return '';
       });

@@ -96,11 +96,10 @@ async function main() {
 
   const systemPrompt = buildSystemPrompt(issueNumber);
   const userPrompt = buildUserPrompt(issueNumber, issue);
-
   const executionConfig = getReviewerExecutionConfig();
   const runGhCommandTool = createRunGhCommandTool();
 
-  const proxyServer = await startProviderProxy();
+  let proxyServer: Server | undefined;
   const client = new CopilotClient({
     workingDirectory: process.cwd(),
     logLevel: 'none',
@@ -111,9 +110,9 @@ async function main() {
   let failed = false;
 
   try {
+    proxyServer = await startProviderProxy();
     console.log('[run-issue-task] starting client...');
     await client.start();
-
     console.log('[run-issue-task] creating session...');
     const sessionConfig: SessionConfig & { autoApproveAll?: boolean } = {
       model: executionConfig.model,
@@ -134,16 +133,12 @@ async function main() {
       },
       streaming: false,
     };
-
     const session = await client.createSession(sessionConfig);
     sessionId = session.sessionId;
-    console.log(`[run-issue-task] session created: ${sessionId}`);
-
+    console.log(`[run-issue-task] session_id: ${sessionId}`);
     setActiveOpenRouterSessionId(sessionId);
-
     console.log('[run-issue-task] sending task and waiting for completion...');
     await session.sendAndWait({ prompt: userPrompt }, 900000);
-
     console.log('[run-issue-task] disconnecting session...');
     await session.disconnect();
     console.log('[run-issue-task] complete!');
@@ -158,7 +153,9 @@ async function main() {
     } catch (e) {
       // Silence stop errors -- the run's success/failure is already determined above.
     }
-    await stopProviderProxy(proxyServer);
+    if (proxyServer) {
+      await stopProviderProxy(proxyServer);
+    }
   }
 
   if (sessionId) {
@@ -166,7 +163,6 @@ async function main() {
   } else {
     console.warn('[run-issue-task] no session_id was captured for this run.');
   }
-
   process.exit(failed ? 1 : 0);
 }
 

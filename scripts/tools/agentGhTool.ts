@@ -56,15 +56,55 @@ export function isAllowedGhCommand(args: string[]): boolean {
  * 'issue/5-fix', 'issue-5', or 'issue_5', but not 'bug/50-fix', 'feature-555', 'issue/55', or 'some5text'.
  */
 export function isBranchNameAssociatedWithIssue(ref: string, triggeringIssueNumber: string): boolean {
-  const escaped = triggeringIssueNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = triggeringIssueNumber.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(`(^|[/\\-_])${escaped}($|[/\\-_])`);
   return pattern.test(ref);
 }
 
 export function extractTargetId(arg: string | undefined): string | null {
   if (!arg) return null;
-  const match = arg.match(/\/(\d+)$/);
-  return (match ? match[1] : null) ?? arg;
+  const match = arg.match(/\/(\d+)\/?$/);
+  if (match) return match[1];
+  if (/^\d+$/.test(arg)) return arg;
+  return null;
+}
+
+export function extractTargetIdFromArgs(args: string[]): string | null {
+  for (let i = 2; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    // Skip flags and flag-like options
+    if (arg.startsWith('-')) {
+      // If it is a flag that takes an option (like --json, -F, -b, --body) without an equals sign,
+      // the next token is its value, so we should skip it as well.
+      const optionFlags = ['--json', '-F', '-b', '--body', '--repo', '-R'];
+      if (optionFlags.includes(arg) && i + 1 < args.length) {
+        i++;
+      }
+      continue;
+    }
+    const extracted = extractTargetId(arg);
+    if (extracted !== null) {
+      return extracted;
+    }
+  }
+  return null;
+}
+
+function getRepoOwnerAndName(): { owner: string; name: string } | null {
+  try {
+    const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      encoding: 'utf-8',
+      timeout: 5000,
+    }).trim();
+    const match = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/);
+    if (match) {
+      return { owner: match[1], name: match[2] };
+    }
+  } catch (err) {
+    console.warn('[agentGhTool] Failed to get repo owner and name from git remote:', err);
+  }
+  return null;
 }
 
 // Note: cachedPrNumbersByIssue is a module-level mutable cache designed to live
@@ -96,20 +136,72 @@ export function getAllowedPrNumbers(triggeringIssueNumber: string): string[] {
   }
 }
 
+// Note: cachedPrLinkedStatus is a module-level mutable cache designed to live
+// for a single process invocation in CI. In long-lived or testing environments,
+// be sure to clear this cache or guard against stale data.
+export const cachedPrLinkedStatus: Record<string, boolean> = {};
+
 /**
  * Directly queries the GitHub CLI to verify if a target PR is formally linked to the triggering issue.
  */
 export function isPrLinkedToIssue(targetPrId: string, triggeringIssueNumber: string): boolean {
+  const cacheKey = `${targetPrId}:${triggeringIssueNumber}`;
+  if (cacheKey in cachedPrLinkedStatus) {
+    return cachedPrLinkedStatus[cacheKey];
+  }
   try {
-    const raw = execFileSync('gh', ['pr', 'view', targetPrId, '--json', 'issues'], {
+    const repoInfo = getRepoOwnerAndName();
+    if (!repoInfo) {
+      console.warn('[agentGhTool] Could not determine repository owner/name for direct link validation.');
+      return false;
+    }
+    const { owner, name } = repoInfo;
+
+    const query = `
+      query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) {
+          pullRequest(number: $number) {
+            closingIssuesReferences(first: 10) {
+              nodes {
+                number
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const raw = execFileSync('gh', [
+      'api',
+      'graphql',
+      '-F', `owner=${owner}`,
+      '-F', `name=${name}`,
+      '-F', `number=${targetPrId}`,
+      '-f', `query=${query}`
+    ], {
       encoding: 'utf-8',
       timeout: 15000,
     });
-    const prData = JSON.parse(raw) as { issues?: Array<{ number: number }> };
-    const issueNumbers = prData.issues?.map((i) => String(i.number)) || [];
-    return issueNumbers.includes(triggeringIssueNumber);
+
+    const parsed = JSON.parse(raw) as {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            closingIssuesReferences?: {
+              nodes?: Array<{ number: number }>;
+            };
+          };
+        };
+      };
+    };
+
+    const nodes = parsed.data?.repository?.pullRequest?.closingIssuesReferences?.nodes || [];
+    const issueNumbers = nodes.map((n) => String(n.number));
+    const result = issueNumbers.includes(triggeringIssueNumber);
+    cachedPrLinkedStatus[cacheKey] = result;
+    return result;
   } catch (err) {
-    console.warn(`[agentGhTool] Failed to verify linked issues for PR #${targetPrId} via gh pr view:`, err);
+    console.warn(`[agentGhTool] Failed to verify linked issues for PR #${targetPrId} via gh api:`, err);
     return false;
   }
 }
@@ -123,7 +215,9 @@ export function isPrLinkedToIssue(targetPrId: string, triggeringIssueNumber: str
  */
 export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
   let callCount = 0;
+  let attemptCount = 0;
   const MAX_CALLS = 10;
+  const MAX_ATTEMPTS = 20;
 
   return defineTool<RunGhCommandArgs>(
     RUN_GH_COMMAND_TOOL_NAME,
@@ -147,9 +241,16 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
       required: ['args'],
     },
     async ({ args }): Promise<RunGhCommandResult> => {
-      // 1. Budget check
+      // 1. Budget checks
+      if (attemptCount >= MAX_ATTEMPTS) {
+        const message = `Rejected: maximum tool call attempt budget of ${MAX_ATTEMPTS} exceeded for this run.`;
+        console.warn(`[agentGhTool] ${message}`);
+        return { error: message };
+      }
+      attemptCount++;
+
       if (callCount >= MAX_CALLS) {
-        const message = `Rejected: maximum tool call budget of ${MAX_CALLS} exceeded for this run.`;
+        const message = `Rejected: maximum tool call success budget of ${MAX_CALLS} exceeded for this run.`;
         console.warn(`[agentGhTool] ${message}`);
         return { error: message };
       }
@@ -190,26 +291,55 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         return { error: message };
       }
 
+      const subcommand = subcommandOf(args);
+
+      // Guard against overly large body sizes or HTML injections (prompt injection or massive outputs)
+      if (['issue comment', 'pr comment'].includes(subcommand)) {
+        let bodyText = '';
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] === '--body' || args[i] === '-b') {
+            bodyText = args[i + 1] || '';
+            break;
+          } else if (args[i].startsWith('--body=')) {
+            bodyText = args[i].substring(7);
+            break;
+          } else if (args[i].startsWith('-b=')) {
+            bodyText = args[i].substring(3);
+            break;
+          }
+        }
+        const MAX_COMMENT_LENGTH = 10000;
+        if (bodyText.length > MAX_COMMENT_LENGTH) {
+          const message = `Rejected: comment body is too long (${bodyText.length} characters). Maximum allowed length is ${MAX_COMMENT_LENGTH} characters.`;
+          console.warn(`[agentGhTool] ${message}`);
+          return { error: message };
+        }
+        const containsHtmlInjections = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi.test(bodyText) ||
+                                       /<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi.test(bodyText);
+        if (containsHtmlInjections) {
+          const message = 'Rejected: comment body contains potential HTML script/iframe injections.';
+          console.warn(`[agentGhTool] ${message}`);
+          return { error: message };
+        }
+      }
+
       // 6. Target-ID boundary validation (scoping to the triggering issue/PR)
       const triggeringIssueNumber = process.env.ISSUE_NUMBER;
       if (triggeringIssueNumber) {
-        const targetId = extractTargetId(args[2]);
-        const subcommand = subcommandOf(args);
-
+        const targetId = extractTargetIdFromArgs(args);
         if (['issue view', 'issue comment'].includes(subcommand)) {
           if (!targetId || targetId !== triggeringIssueNumber) {
-            const message = `Rejected: gh command target issue (${args[2] || 'none'}) does not match triggering issue #${triggeringIssueNumber}.`;
+            const message = `Rejected: gh command target issue (${targetId || 'none'}) does not match triggering issue #${triggeringIssueNumber}.`;
             console.warn(`[agentGhTool] ${message}`);
             return { error: message };
           }
         }
-
         if (['pr view', 'pr diff', 'pr comment'].includes(subcommand)) {
           const allowedPrs = getAllowedPrNumbers(triggeringIssueNumber);
           const isBranchMatch = targetId !== null && allowedPrs.includes(targetId);
           const isDirectLinkMatch = isBranchMatch || (targetId !== null && isPrLinkedToIssue(targetId, triggeringIssueNumber));
           if (!targetId || !isDirectLinkMatch) {
-            const message = `Rejected: gh command target PR (${args[2] || 'none'}) is not linked or associated with triggering issue #${triggeringIssueNumber} (allowed PRs: ${allowedPrs.join(', ') || 'none'}).`;
+            const message = `Rejected: gh command target PR (${targetId || 'none'}) is not linked or associated with triggering issue #${triggeringIssueNumber} (allowed PRs: ${allowedPrs.join(', ') || 'none'}).`;
             console.warn(`[agentGhTool] ${message}`);
             return { error: message };
           }
@@ -218,7 +348,6 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
 
       // 7. Increment call count only after all validation checks have passed successfully
       callCount++;
-
       try {
         console.log(`[agentGhTool] Running: gh ${args.join(' ')}`);
         const output = execFileSync('gh', args, {
