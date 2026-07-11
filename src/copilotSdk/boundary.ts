@@ -62,5 +62,30 @@ export class CopilotClient extends BaseCopilotClient {
       onPermissionRequest,
     });
   }
+
+  /**
+   * Mirrors createSession's autoApproveAll behavior for resumed sessions.
+   * Without this override, resumeSession falls through to the base SDK,
+   * which does not apply any default onPermissionRequest -- callers that
+   * relied on createSession's auto-approve default would silently stop
+   * getting it the moment they resume a session (e.g. auditor retry loops).
+   */
+  override async resumeSession(
+    sessionId: string,
+    config: SessionConfig & { autoApproveAll?: boolean }
+  ): Promise<CopilotSession> {
+    const { autoApproveAll = true, ...baseConfig } = config;
+
+    const onPermissionRequest = autoApproveAll
+      ? async (req: PermissionRequest): Promise<PermissionRequestResult> => {
+          return { kind: 'approve-once' };
+        }
+      : baseConfig.onPermissionRequest;
+
+    return super.resumeSession(sessionId, {
+      ...baseConfig,
+      onPermissionRequest,
+    });
+  }
 }
 
