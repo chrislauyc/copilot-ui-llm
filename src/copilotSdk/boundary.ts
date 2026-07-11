@@ -26,12 +26,11 @@ export type {
 /**
  * Creates and registers a custom Tool definition with clean, abstracted typing.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function defineTool<T = any>(
+export function defineTool<T = unknown>(
   name: string,
   description: string,
-  parameters: Record<string, any>, // eslint-disable-line @typescript-eslint/no-explicit-any
-  handler: (args: T) => Promise<any> // eslint-disable-line @typescript-eslint/no-explicit-any
+  parameters: Record<string, unknown>,
+  handler: (args: T) => Promise<unknown>
 ): Tool<T> {
   return {
     name,
