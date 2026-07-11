@@ -239,7 +239,7 @@ function checkFileForViolations(filePath: string, addedLines: Set<number>): Viol
       const remaining = commentText.substring(idx + directiveWord.length).trim();
       const firstLine = remaining.split('\n')[0];
       const cleanLine = firstLine ? firstLine.replace(/\*\//g, '').trim() : '';
-      const rules = cleanLine ? cleanLine.split(',').map(r => r.trim()).filter(Boolean) : [];
+      const rules = cleanLine ? (cleanLine.split('--')[0] || '').split(',').map(r => r.trim()).filter(Boolean) : [];
 
       eslintDirectives.push({ type, rules, line: comment.line });
     }
