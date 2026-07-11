@@ -144,8 +144,71 @@ export function buildAuditorSessionSettings(
 }
 
 /**
- * Manages the lifecycle of a CopilotClient (start/stop) and executes a single-turn audit.
- * This encapsulates the client lifecycle logic shared between auditor roles.
+ * How much of the model's last assistant message to include when we give up
+ * retrying and throw. Long enough to diagnose ("it asked a clarifying
+ * question about X" / "it refused because Y"), short enough not to flood logs.
+ */
+const LAST_MESSAGE_TRUNCATE_LENGTH = 2000;
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}... [truncated, ${text.length} chars total]`;
+}
+
+/**
+ * Attaches a listener that accumulates the assistant's text content for the
+ * *current* turn so that, if the tool is never called, we have something
+ * meaningful to report instead of a bare "returned null".
+ *
+ * Returns a getter for the accumulated text and the unsubscribe function.
+ * Callers should reset (re-attach) this per turn, since content naturally
+ * accumulates across `assistant.message` / `assistant.message_delta` events.
+ */
+function trackLastAssistantMessage(session: any): { getText: () => string; unsubscribe: () => void } {
+  let text = '';
+  const unsubscribe = session.on((event: any) => {
+    if (!event) return;
+    if (event.type === 'assistant.message') {
+      text += event.data?.content || '';
+    } else if (event.type === 'assistant.message_delta') {
+      text += event.data?.delta || event.data?.content || '';
+    }
+  });
+  return { getText: () => text, unsubscribe };
+}
+
+async function sendAndWaitWithAbort(
+  session: any,
+  prompt: { prompt: string },
+  timeoutMs: number,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  if (!abortSignal) {
+    await session.sendAndWait(prompt, timeoutMs);
+    return;
+  }
+  await Promise.race([
+    session.sendAndWait(prompt, timeoutMs),
+    new Promise<never>((_, reject) => {
+      const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
+      if (abortSignal.aborted) onAbort();
+      else abortSignal.addEventListener('abort', onAbort, { once: true });
+    })
+  ]);
+}
+
+/**
+ * Manages the lifecycle of a CopilotClient (start/stop) and executes an audit
+ * turn, retrying with a restricted toolset if the model ends its turn without
+ * calling the target tool.
+ *
+ * The underlying `@github/copilot-sdk` (v1.0.1) has no `tool_choice`
+ * enforcement mechanism -- the `toolChoice` on `responseRequirements` is not
+ * read or forwarded by the SDK. The only "enforcement" is the system prompt's
+ * plain-English instruction, which the model doesn't always follow (refusal,
+ * confusion, clarifying questions, running out of turns exploring context,
+ * etc). This encapsulates the client lifecycle logic shared between auditor
+ * roles.
  */
 export async function executeAuditSession<T>(
   workingDirectory: string,
@@ -156,13 +219,18 @@ export async function executeAuditSession<T>(
   responseRequirements: ResponseRequirement,
   abortSignal?: AbortSignal,
   timeoutMs: number = 300000,
-  onSessionId?: (sessionId: string) => void): Promise<T | null> {
+  onSessionId?: (sessionId: string) => void,
+  maxRetries: number = 2): Promise<T | null> {
   const client = new CopilotClient({
     workingDirectory,
     logLevel: 'none',
     useLoggedInUser: false,
   });
+  const toolName = tool.function.name;
   let result: T | null = null;
+  let lastAssistantText = '';
+  let sessionId: string | undefined;
+
   try {
     console.log('[executeAuditSession] starting client...');
     await client.start();
@@ -175,24 +243,69 @@ export async function executeAuditSession<T>(
       responseRequirements
     );
     console.log('[executeAuditSession] creating session...');
-    const session = await client.createSession(sessionSettings as any);
+    let session = await client.createSession(sessionSettings as any);
+    sessionId = session.sessionId;
     console.log(`[executeAuditSession] session created: ${session.sessionId}`);
     onSessionId?.(session.sessionId);
+
+    let tracker = trackLastAssistantMessage(session);
     console.log('[executeAuditSession] sending and waiting for response...');
-    if (abortSignal) {
-      await Promise.race([
-        session.sendAndWait({ prompt: userPrompt }, timeoutMs),
-        new Promise<never>((_, reject) => {
-          const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
-          if (abortSignal.aborted) onAbort();
-          else abortSignal.addEventListener('abort', onAbort, { once: true });
-        })
-      ]);
-    } else {
-      await session.sendAndWait({ prompt: userPrompt }, timeoutMs);
+    await sendAndWaitWithAbort(session, { prompt: userPrompt }, timeoutMs, abortSignal);
+    lastAssistantText = tracker.getText();
+    tracker.unsubscribe();
+
+    let attempt = 0;
+    while (result === null && attempt < maxRetries) {
+      attempt++;
+      console.warn(
+        `[executeAuditSession] turn ended without '${toolName}' being called ` +
+        `(attempt ${attempt}/${maxRetries}); resuming session with restricted toolset...`
+      );
+
+      // Resuming does not implicitly carry over the tool handler,
+      // onPermissionRequest, or other session settings -- everything has to
+      // be re-supplied explicitly. We also hard-restrict availableTools to
+      // just the target tool so the model can't keep exploring/reading files
+      // instead of concluding.
+      const retrySettings = buildAuditorSessionSettings(
+        executionConfig,
+        systemPrompt,
+        tool,
+        (args) => { result = args as T; },
+        { toolChoice: responseRequirements.toolChoice, allowOthers: false }
+      );
+
+      const nudge = lastAssistantText.trim()
+        ? `You did not call '${toolName}'. Your last message was:\n\n"""\n${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}\n"""\n\nYou must now call '${toolName}' with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call '${toolName}' now.`
+        : `You ended your turn without calling '${toolName}'. You must now call '${toolName}' with your findings. Do not respond conversationally and do not call any other tool -- call '${toolName}' now.`;
+
+      session = await client.resumeSession(sessionId, {
+        ...retrySettings,
+        availableTools: [toolName],
+        systemMessage: {
+          mode: 'append',
+          content: `\n\nIMPORTANT: ${nudge}`
+        },
+      } as any);
+      sessionId = session.sessionId;
+      onSessionId?.(session.sessionId);
+
+      tracker = trackLastAssistantMessage(session);
+      await sendAndWaitWithAbort(session, { prompt: nudge }, timeoutMs, abortSignal);
+      lastAssistantText = tracker.getText() || lastAssistantText;
+      tracker.unsubscribe();
     }
+
     console.log('[executeAuditSession] disconnecting session...');
     await session.disconnect();
+
+    if (result === null) {
+      const truncated = truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH);
+      throw new Error(
+        `Reviewer session ended without calling '${toolName}' after ${maxRetries} retr${maxRetries === 1 ? 'y' : 'ies'}. ` +
+        `Model's last message: ${truncated || '(no assistant text captured)'}`
+      );
+    }
 
     console.log('[executeAuditSession] complete!');
     return result;
@@ -203,4 +316,4 @@ export async function executeAuditSession<T>(
       // Silence stop errors as the main intent (audit result) is already captured or failed
     }
   }
-}
+        }

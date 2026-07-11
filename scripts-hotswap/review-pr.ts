@@ -273,9 +273,13 @@ ${hasDiffStat ? '- `diff-stat.txt`: A summary of the changed files and lines.\n'
     console.warn('[review-pr] no session_id was captured for this run.');
   }
 
+  // executeAuditSession throws (rather than returning null) if the model
+  // never calls submit_code_review after exhausting its retries, so by this
+  // point `result` is guaranteed non-null -- the throw is caught by main()'s
+  // top-level .catch(), which logs it (including the model's last message)
+  // and exits non-zero. This check only exists to narrow the type for TS.
   if (!result) {
-    console.error('Reviewer failed to return findings.');
-    process.exit(1);
+    throw new Error('Unreachable: executeAuditSession resolved without throwing or returning a result.');
   }
 
   if (result.findings.length === 0) {
