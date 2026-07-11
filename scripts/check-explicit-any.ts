@@ -86,7 +86,7 @@ function checkFileForViolations(filePath: string): Violation[] {
   const eslintDirectives: EslintDirective[] = [];
   
   for (let i = 0; i < fileLines.length; i++) {
-    const lineText = fileLines[i];
+    const lineText = fileLines[i] || '';
     const lineNum = i + 1;
     
     if (lineText.includes('eslint-disable') || lineText.includes('eslint-enable')) {
@@ -115,7 +115,7 @@ function checkFileForViolations(filePath: string): Violation[] {
 
   // Check for @ts-ignore / @ts-expect-error
   for (let i = 0; i < fileLines.length; i++) {
-    const lineText = fileLines[i];
+    const lineText = fileLines[i] || '';
     const lineNum = i + 1;
     if (/@ts-(?:ignore|expect-error)\b/.test(lineText)) {
       const rule = '@typescript-eslint/ban-ts-comment';
