@@ -1,3 +1,4 @@
+import '../serverRuntime';
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -68,4 +69,34 @@ describe('Logging System Tests', () => {
     expect(fileContent).toContain('[WARN] Warn msg');
     expect(fileContent).toContain('[ERROR] Error msg');
   });
+  it('should intercept console.warn and log to file and memory at WARN level', () => {
+    const testMsg = `Console Warn Test Message ${Date.now()}`;
+    
+    console.warn(testMsg);
+    
+    // Check in-memory logs
+    const inMemory = lastRunLog.some(l => l.includes(testMsg) && l.includes('[WARN]'));
+    expect(inMemory).toBe(true);
+    
+    // Check file logs
+    const fileContent = fs.readFileSync(LOG_FILE, 'utf8');
+    expect(fileContent).toContain(testMsg);
+    expect(fileContent).toContain('[WARN]');
+  });
+
+  it('should intercept console.error and log to file and memory at ERROR level', () => {
+    const testMsg = `Console Error Test Message ${Date.now()}`;
+    
+    console.error(testMsg);
+    
+    // Check in-memory logs
+    const inMemory = lastRunLog.some(l => l.includes(testMsg) && l.includes('[ERROR]'));
+    expect(inMemory).toBe(true);
+    
+    // Check file logs
+    const fileContent = fs.readFileSync(LOG_FILE, 'utf8');
+    expect(fileContent).toContain(testMsg);
+    expect(fileContent).toContain('[ERROR]');
+  });
+
 });

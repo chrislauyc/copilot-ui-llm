@@ -270,6 +270,8 @@ stopSessionGarbageCollector = startSessionGarbageCollector({
 });
 
 
+let isInterceptingConsole = false;
+
 // Intercept stderr to capture subprocess crashes
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 process.stderr.write = function (
@@ -278,7 +280,7 @@ process.stderr.write = function (
   callback?: (err: Error | null | undefined) => void
 ): boolean {
   const str = chunk.toString();
-  if (str.trim()) {
+  if (str.trim() && !isInterceptingConsole) {
     writeLog(`[STDERR] ${str.trim()}`);
   }
   
@@ -302,8 +304,51 @@ console.log = function(...args: unknown[]) {
   if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
     writeLog(`[LOG] ${sanitizedMessage}`, LogLevel.DEBUG);
   }
-
   return originalLog.apply(console, [sanitizedMessage]);
+};
+
+// Intercept console.warn
+const originalWarn = console.warn;
+console.warn = function(...args: unknown[]) {
+  const message = args.map(arg => 
+    typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+  ).join(' ');
+  
+  const sanitizedMessage = sanitizeSensitives(message, sensitiveValuesCache || new Set());
+  
+  if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
+    writeLog(`[WARN] ${sanitizedMessage}`, LogLevel.WARN);
+  }
+  
+  const wasIntercepting = isInterceptingConsole;
+  isInterceptingConsole = true;
+  try {
+    return originalWarn.apply(console, [sanitizedMessage]);
+  } finally {
+    isInterceptingConsole = wasIntercepting;
+  }
+};
+
+// Intercept console.error
+const originalError = console.error;
+console.error = function(...args: unknown[]) {
+  const message = args.map(arg => 
+    typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+  ).join(' ');
+  
+  const sanitizedMessage = sanitizeSensitives(message, sensitiveValuesCache || new Set());
+  
+  if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
+    writeLog(`[ERROR] ${sanitizedMessage}`, LogLevel.ERROR);
+  }
+  
+  const wasIntercepting = isInterceptingConsole;
+  isInterceptingConsole = true;
+  try {
+    return originalError.apply(console, [sanitizedMessage]);
+  } finally {
+    isInterceptingConsole = wasIntercepting;
+  }
 };
 
 function isStreamError(err: unknown): err is Error & { code?: string } {
