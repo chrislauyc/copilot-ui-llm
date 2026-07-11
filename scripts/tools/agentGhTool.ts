@@ -56,7 +56,8 @@ export function isAllowedGhCommand(args: string[]): boolean {
  * 'issue/5-fix', 'issue-5', or 'issue_5', but not 'bug/50-fix', 'feature-555', 'issue/55', or 'some5text'.
  */
 export function isBranchNameAssociatedWithIssue(ref: string, triggeringIssueNumber: string): boolean {
-  const pattern = new RegExp(`(^|[/\\-_])${triggeringIssueNumber}($|[/\\-_])`);
+  const escaped = triggeringIssueNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(^|[/\\-_])${escaped}($|[/\\-_])`);
   return pattern.test(ref);
 }
 
@@ -66,7 +67,10 @@ export function extractTargetId(arg: string | undefined): string | null {
   return (match ? match[1] : null) ?? arg;
 }
 
-const cachedPrNumbersByIssue: Record<string, string[]> = {};
+// Note: cachedPrNumbersByIssue is a module-level mutable cache designed to live
+// for a single process invocation in CI. In long-lived or testing environments,
+// be sure to clear this cache or guard against stale data.
+export const cachedPrNumbersByIssue: Record<string, string[]> = {};
 
 export function getAllowedPrNumbers(triggeringIssueNumber: string): string[] {
   if (cachedPrNumbersByIssue[triggeringIssueNumber] !== undefined) {
@@ -168,7 +172,7 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
 
       // 4. Parameter security check: --repo / -R (no cross-repo)
       const hasRepoArg = args.some((arg) =>
-        arg === '--repo' || arg.startsWith('--repo=') || arg.startsWith('-R')
+        arg === '--repo' || arg.startsWith('--repo=') || arg === '-R'
       );
       if (hasRepoArg) {
         const message = 'Rejected: cross-repo access is forbidden. Remove --repo/-R flags.';
@@ -178,7 +182,7 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
 
       // 5. Parameter security check: --body-file / -F (no local file access)
       const hasBodyFileArg = args.some((arg) =>
-        arg === '--body-file' || arg.startsWith('--body-file=') || arg === '-F' || arg.startsWith('-F')
+        arg === '--body-file' || arg.startsWith('--body-file=') || arg === '-F'
       );
       if (hasBodyFileArg) {
         const message = 'Rejected: reading from files via --body-file/-F is forbidden. Use --body/-b instead.';
@@ -203,9 +207,8 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         if (['pr view', 'pr diff', 'pr comment'].includes(subcommand)) {
           const allowedPrs = getAllowedPrNumbers(triggeringIssueNumber);
           const isBranchMatch = targetId !== null && allowedPrs.includes(targetId);
-          const isDirectLinkMatch = targetId !== null && isPrLinkedToIssue(targetId, triggeringIssueNumber);
-
-          if (!targetId || (!isBranchMatch && !isDirectLinkMatch)) {
+          const isDirectLinkMatch = isBranchMatch || (targetId !== null && isPrLinkedToIssue(targetId, triggeringIssueNumber));
+          if (!targetId || !isDirectLinkMatch) {
             const message = `Rejected: gh command target PR (${args[2] || 'none'}) is not linked or associated with triggering issue #${triggeringIssueNumber} (allowed PRs: ${allowedPrs.join(', ') || 'none'}).`;
             console.warn(`[agentGhTool] ${message}`);
             return { error: message };
