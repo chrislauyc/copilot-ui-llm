@@ -64,7 +64,7 @@ export function isBranchNameAssociatedWithIssue(ref: string, triggeringIssueNumb
 export function extractTargetId(arg: string | undefined): string | null {
   if (!arg) return null;
   const match = arg.match(/\/(\d+)\/?$/);
-  if (match) return match[1];
+  if (match) return match[1] ?? null;
   if (/^\d+$/.test(arg)) return arg;
   return null;
 }
@@ -98,7 +98,7 @@ function getRepoOwnerAndName(): { owner: string; name: string } | null {
       timeout: 5000,
     }).trim();
     const match = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/);
-    if (match) {
+    if (match && match[1] && match[2]) {
       return { owner: match[1], name: match[2] };
     }
   } catch (err) {
@@ -147,7 +147,7 @@ export const cachedPrLinkedStatus: Record<string, boolean> = {};
 export function isPrLinkedToIssue(targetPrId: string, triggeringIssueNumber: string): boolean {
   const cacheKey = `${targetPrId}:${triggeringIssueNumber}`;
   if (cacheKey in cachedPrLinkedStatus) {
-    return cachedPrLinkedStatus[cacheKey];
+    return cachedPrLinkedStatus[cacheKey]!;
   }
   try {
     const repoInfo = getRepoOwnerAndName();
@@ -297,14 +297,16 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
       if (['issue comment', 'pr comment'].includes(subcommand)) {
         let bodyText = '';
         for (let i = 0; i < args.length; i++) {
-          if (args[i] === '--body' || args[i] === '-b') {
+          const arg = args[i];
+          if (!arg) continue;
+          if (arg === '--body' || arg === '-b') {
             bodyText = args[i + 1] || '';
             break;
-          } else if (args[i].startsWith('--body=')) {
-            bodyText = args[i].substring(7);
+          } else if (arg.startsWith('--body=')) {
+            bodyText = arg.substring(7);
             break;
-          } else if (args[i].startsWith('-b=')) {
-            bodyText = args[i].substring(3);
+          } else if (arg.startsWith('-b=')) {
+            bodyText = arg.substring(3);
             break;
           }
         }
