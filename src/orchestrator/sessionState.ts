@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { CopilotClient, SessionConfig, SdkProviderConfig, Tool } from '../copilotSdk/boundary';
+import { CopilotClient, SessionConfig, SdkProviderConfig, Tool, CopilotSession } from '../copilotSdk/boundary';
 import { MODEL_TIERS } from '../config/models';
 import { SessionRecord, StateSnapshot } from '../types/session';
 import { AuditResult } from '../types/audit';
@@ -145,7 +145,7 @@ export async function getOrCreateSession(
       existing = {
         ...stored,
         sessionId,
-        copilotSession: null as any,
+        copilotSession: null as unknown as CopilotSession,
         currentModel: stored.currentModel || 'gemini-3.1-flash-lite',
         cwd: stored.cwd || getWorkspaceRoot(),
         lastUsedAt: stored.lastUsedAt || now,

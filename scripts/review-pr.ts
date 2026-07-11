@@ -8,9 +8,9 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
 }
 import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
-import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
-import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper';
-import { submitCodeReviewTool } from '../src/config/tools';
+import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime.ts';
+import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper.ts';
+import { submitCodeReviewTool } from '../src/config/tools.ts';
 import { getFilteredDiff } from './diffFilter';
 import {
   loadPreviousReviewState,

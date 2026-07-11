@@ -26,11 +26,11 @@ export type {
 /**
  * Creates and registers a custom Tool definition with clean, abstracted typing.
  */
-export function defineTool<T = any>(
+export function defineTool<T = unknown>(
   name: string,
   description: string,
-  parameters: Record<string, any>,
-  handler: (args: T) => Promise<any>
+  parameters: Record<string, unknown>,
+  handler: (args: T) => Promise<unknown>
 ): Tool<T> {
   return {
     name,
