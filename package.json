@@ -43,6 +43,7 @@
     "@types/node": "^22.14.0",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
+    "@typescript-eslint/eslint-plugin": "^8.62.1",
     "@typescript-eslint/parser": "^8.62.1",
     "@vitest/coverage-v8": "^4.1.9",
     "adm-zip": "^0.5.17",
