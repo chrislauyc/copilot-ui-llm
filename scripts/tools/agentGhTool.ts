@@ -50,6 +50,43 @@ export function isAllowedGhCommand(args: string[]): boolean {
   return ALLOWED_GH_COMMANDS.includes(subcommandOf(args));
 }
 
+function extractTargetId(arg: string | undefined): string | null {
+  if (!arg) return null;
+  const match = arg.match(/\/(\d+)$/);
+  return match ? match[1] : arg;
+}
+
+let cachedPrNumbers: string[] | null = null;
+
+function getAllowedPrNumbers(triggeringIssueNumber: string): string[] {
+  if (cachedPrNumbers !== null) return cachedPrNumbers;
+  try {
+    const raw = execFileSync('gh', ['pr', 'list', '--json', 'number,headRefName'], {
+      encoding: 'utf-8',
+      timeout: 15000,
+    });
+    const prs = JSON.parse(raw) as Array<{ number: number; headRefName: string }>;
+    const allowed = prs
+      .filter((pr) => {
+        const ref = pr.headRefName || '';
+        return (
+          ref === `issue/${triggeringIssueNumber}` ||
+          ref.startsWith(`issue/${triggeringIssueNumber}-`) ||
+          ref === `issue-${triggeringIssueNumber}` ||
+          ref.startsWith(`issue-${triggeringIssueNumber}-`) ||
+          ref.includes(`/${triggeringIssueNumber}`) ||
+          ref.includes(`-${triggeringIssueNumber}`)
+        );
+      })
+      .map((pr) => String(pr.number));
+    cachedPrNumbers = allowed;
+    return cachedPrNumbers;
+  } catch (err) {
+    console.warn(`[agentGhTool] Failed to fetch allowed PRs for issue #${triggeringIssueNumber}:`, err);
+    return [];
+  }
+}
+
 /**
  * Builds the `run_gh_command` SDK tool. The handler never throws for a
  * disallowed subcommand -- it returns a rejection as normal tool output so
@@ -58,6 +95,9 @@ export function isAllowedGhCommand(args: string[]): boolean {
  * unexpected failures, which the caller's session error handling covers.
  */
 export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
+  let callCount = 0;
+  const MAX_CALLS = 10;
+
   return defineTool<RunGhCommandArgs>(
     RUN_GH_COMMAND_TOOL_NAME,
     'Executes a single whitelisted "gh" (GitHub CLI) subcommand and returns its ' +
@@ -80,12 +120,18 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
       required: ['args'],
     },
     async ({ args }): Promise<RunGhCommandResult> => {
+      if (callCount >= MAX_CALLS) {
+        const message = `Rejected: maximum tool call budget of ${MAX_CALLS} exceeded for this run.`;
+        console.warn(`[agentGhTool] ${message}`);
+        return { error: message };
+      }
+      callCount++;
+
       if (!Array.isArray(args) || args.length < 2) {
         const message = `Rejected: gh command must include at least a resource and an action (got ${JSON.stringify(args)}).`;
         console.warn(`[agentGhTool] ${message}`);
         return { error: message };
       }
-
       if (!isAllowedGhCommand(args)) {
         const message =
           `Rejected: "gh ${subcommandOf(args)}" is not on the allowlist. ` +
@@ -93,7 +139,6 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         console.warn(`[agentGhTool] Rejected disallowed gh subcommand: "${subcommandOf(args)}" (full args: ${JSON.stringify(args)})`);
         return { error: message };
       }
-
       const hasRepoArg = args.some((arg) =>
         arg === '--repo' || arg.startsWith('--repo=') || arg.startsWith('-R')
       );
@@ -101,6 +146,37 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         const message = 'Rejected: cross-repo access is forbidden. Remove --repo/-R flags.';
         console.warn(`[agentGhTool] ${message}`);
         return { error: message };
+      }
+      const hasBodyFileArg = args.some((arg) =>
+        arg === '--body-file' || arg.startsWith('--body-file=') || arg === '-F' || arg.startsWith('-F')
+      );
+      if (hasBodyFileArg) {
+        const message = 'Rejected: reading from files via --body-file/-F is forbidden. Use --body/-b instead.';
+        console.warn(`[agentGhTool] ${message}`);
+        return { error: message };
+      }
+
+      const triggeringIssueNumber = process.env.ISSUE_NUMBER;
+      if (triggeringIssueNumber) {
+        const targetId = extractTargetId(args[2]);
+        const subcommand = subcommandOf(args);
+
+        if (['issue view', 'issue comment'].includes(subcommand)) {
+          if (!targetId || targetId !== triggeringIssueNumber) {
+            const message = `Rejected: gh command target issue (${args[2] || 'none'}) does not match triggering issue #${triggeringIssueNumber}.`;
+            console.warn(`[agentGhTool] ${message}`);
+            return { error: message };
+          }
+        }
+
+        if (['pr view', 'pr diff', 'pr comment'].includes(subcommand)) {
+          const allowedPrs = getAllowedPrNumbers(triggeringIssueNumber);
+          if (!targetId || !allowedPrs.includes(targetId)) {
+            const message = `Rejected: gh command target PR (${args[2] || 'none'}) is not linked or associated with triggering issue #${triggeringIssueNumber} (allowed PRs: ${allowedPrs.join(', ') || 'none'}).`;
+            console.warn(`[agentGhTool] ${message}`);
+            return { error: message };
+          }
+        }
       }
 
       try {
@@ -111,9 +187,10 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
           timeout: 60000,
         });
         return { output };
-      } catch (err: any) {
-        const message =
-          err?.stderr?.toString?.() || err?.message || String(err);
+      } catch (err) {
+        const errWithStderr = err as { stderr?: Buffer | string; message?: string };
+        const stderr = errWithStderr?.stderr;
+        const message = (stderr ? stderr.toString() : null) || errWithStderr?.message || String(err);
         console.error(`[agentGhTool] gh command failed: ${message}`);
         return { error: `gh command failed: ${message}` };
       }

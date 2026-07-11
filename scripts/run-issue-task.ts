@@ -6,6 +6,7 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
     process.env.REVIEWER_PROVIDER = 'gemini';
   }
 }
+
 import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
@@ -74,7 +75,6 @@ function buildUserPrompt(issueNumber: string, issue: IssuePayload): string {
 
 async function main() {
   const issueNumber = process.env.ISSUE_NUMBER;
-
   if (!issueNumber || !issueNumber.trim()) {
     console.error('Missing required env var: ISSUE_NUMBER.');
     process.exit(1);
@@ -84,8 +84,9 @@ async function main() {
   let issue: IssuePayload;
   try {
     issue = fetchIssue(issueNumber);
-  } catch (err: any) {
-    console.error(`[run-issue-task] failed to fetch issue #${issueNumber}:`, err?.message || err);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[run-issue-task] failed to fetch issue #${issueNumber}:`, message);
     process.exit(1);
   }
 
@@ -121,27 +122,19 @@ async function main() {
       availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME),
       autoApproveAll: false,
       onPermissionRequest: async (req) => {
-        let requestedTool: string | undefined;
-        if ('toolName' in req) {
-          requestedTool = req.toolName as string;
-        } else if ('name' in req) {
-          requestedTool = req.name as string;
-        } else if ('toolCalls' in req && Array.isArray(req.toolCalls)) {
-          const firstCall = req.toolCalls[0] as { function?: { name?: string } } | undefined;
-          requestedTool = firstCall?.function?.name;
-        }
-
-        if (requestedTool === RUN_GH_COMMAND_TOOL_NAME) {
+        if (req.kind === 'custom-tool' && req.toolName === RUN_GH_COMMAND_TOOL_NAME) {
           return { kind: 'approve-once' };
         }
-        return { kind: 'reject', reason: `Tool ${requestedTool || 'unknown'} is not permitted.` };
+        const toolName = req.kind === 'custom-tool' ? req.toolName : 'unknown';
+        return { kind: 'reject', feedback: `Tool ${toolName} is not permitted.` };
       },
       streaming: false,
     };
-    const session = await client.createSession(sessionConfig);
 
+    const session = await client.createSession(sessionConfig);
     sessionId = session.sessionId;
     console.log(`[run-issue-task] session created: ${sessionId}`);
+
     setActiveOpenRouterSessionId(sessionId);
 
     console.log('[run-issue-task] sending task and waiting for completion...');
@@ -149,11 +142,11 @@ async function main() {
 
     console.log('[run-issue-task] disconnecting session...');
     await session.disconnect();
-
     console.log('[run-issue-task] complete!');
-  } catch (err: any) {
+  } catch (err) {
     failed = true;
-    console.error('[run-issue-task] agent run failed:', err?.message || err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[run-issue-task] agent run failed:', message);
   } finally {
     setActiveOpenRouterSessionId(undefined);
     try {
@@ -174,6 +167,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('[run-issue-task] fatal error:', err?.message || err);
+  const message = err instanceof Error ? err.message : String(err);
+  console.error('[run-issue-task] fatal error:', message);
   process.exit(1);
 });
