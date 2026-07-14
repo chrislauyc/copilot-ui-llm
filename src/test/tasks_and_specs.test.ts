@@ -228,8 +228,13 @@ Details A`;
     // Clean up original file to simulate moving it
     fs.unlinkSync(originalPath);
 
-    // Write to a new directory
-    const movedDir = 'moved-spec-tasks-dir';
+    // Write to a new directory. To test migration properly with the tightened heuristic
+    // which requires the immediate parent directory to be identical, we simulate moving
+    // the parent directory rather than placing it in a differently named directory.
+    // The previous test changed the parent dir from test-spec-tasks-dir to moved-spec-tasks-dir
+    // which now intentionally breaks migration since parent directories differ.
+    // Let's create an outer wrapper and move the directory inside.
+    const movedDir = 'outer-folder/test-spec-tasks-dir';
     const movedDirFull = path.join(getWorkspaceRoot(), movedDir);
     if (!fs.existsSync(movedDirFull)) {
       fs.mkdirSync(movedDirFull, { recursive: true });
