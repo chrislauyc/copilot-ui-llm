@@ -22,9 +22,20 @@ db.exec(`
     createdAt INTEGER
   );
 
+  CREATE TABLE IF NOT EXISTS pbis (
+    pbiId TEXT PRIMARY KEY,
+    specId TEXT REFERENCES specs(specId),
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT CHECK(status IN ('pending','in_progress','blocked','done')) DEFAULT 'pending',
+    dependsOn TEXT,              -- JSON array of pbiIds
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
   CREATE TABLE IF NOT EXISTS tasks (
     taskId TEXT PRIMARY KEY,
-    specId TEXT REFERENCES specs(specId),
+    specId TEXT REFERENCES specs(specId), -- @deprecated in favor of pbiId
     specVersion TEXT NOT NULL,
     title TEXT NOT NULL,
     description TEXT,
@@ -71,8 +82,13 @@ db.exec(`
   );
 `);
 
-try {
+// Robustly check and add missing columns
+const sessionsColumns = db.pragma('table_info(sessions)') as { name: string }[];
+if (!sessionsColumns.some(col => col.name === 'taskId')) {
   db.prepare('ALTER TABLE sessions ADD COLUMN taskId TEXT').run();
-} catch (e) {
-  // Ignored if column already exists or table is empty
+}
+
+const tasksColumns = db.pragma('table_info(tasks)') as { name: string }[];
+if (!tasksColumns.some(col => col.name === 'pbiId')) {
+  db.prepare('ALTER TABLE tasks ADD COLUMN pbiId TEXT REFERENCES pbis(pbiId)').run();
 }

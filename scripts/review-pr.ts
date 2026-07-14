@@ -107,13 +107,6 @@ function resolveDiffRange(
 }
 
 const submitCodeReviewTool = typeof structuredClone === 'function' ? structuredClone(baseSubmitCodeReviewTool) : JSON.parse(JSON.stringify(baseSubmitCodeReviewTool));
-const findingsProps = submitCodeReviewTool.function.parameters.properties.findings.items.properties;
-findingsProps.category = {
-  type: "string",
-  enum: ["bug", "security", "performance", "style"],
-  description: "Optional category of the finding."
-};
-findingsProps.status.description = "Only set this to 'still-open' or 'resolved' for findings that correspond to a prior finding from the comment history. Omit for new findings.";
 
 function buildSystemPrompt(incremental: boolean): string {
   return `You are a code review agent. Review the given PR diff for bugs, compliance issues, and quality concerns.
@@ -131,9 +124,6 @@ Compliance information is located in AGENTS.md and README.md.
 - If the PR consists primarily of code movement/refactoring, limit findings to newly introduced bugs, regressions, or meaningful performance problems.
 - DO NOT raise style/preference findings unless they create a real readability, consistency, or maintenance problem, or violate an established repo standard.
 
-**Tool Use Policy:**
-- You may only use tools to read files from the repository context and call 'submit_code_review'.
-- Do not invoke any other arbitrary tools or commands.
 
 **Classification and Output Rules:**
 - Keep each finding's message concise (target: under ~150 words) unless a code snippet is necessary for clarity.
@@ -147,9 +137,7 @@ Read \`.review-context/comments.md\` to determine if previously reported blockin
 - Do not re-raise a prior finding as newly reported once you judge it addressed; instead, acknowledge it as 'resolved' in the finding output.
 - When a fix introduced in response to prior feedback is found to have introduced a new issue that did not previously exist, raise it as a new finding (regression check).
 - Only set the 'status' field to 'still-open' or 'resolved' on findings that correspond to a prior finding from the comment history.`
-    : `This is a full review of the entire PR diff in \`.review-context/diff.patch\`. Do not set the 'status' field on any findings.`}
-
-Suggestions and nits are not tracked across review rounds -- just report whatever you currently observe, with no 'status' field.
+    : `This is a full review of the entire PR diff in \`.review-context/diff.patch\`.`}
 
 You must not answer conversationally and must strictly invoke 'submit_code_review'.`;
 }

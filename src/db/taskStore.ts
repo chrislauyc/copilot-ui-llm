@@ -20,6 +20,7 @@ export interface TaskRecord {
   readonly blockedReason: string | null;
   readonly createdAt: number;
   readonly updatedAt: number;
+  readonly pbiId: string | null;
 }
 
 export function saveSpec(spec: SpecRecord): void {
@@ -51,10 +52,10 @@ export function saveTask(task: TaskRecord): void {
   const stmt = db.prepare(`
     INSERT INTO tasks (
       taskId, specId, specVersion, title, description, status,
-      touches, dependsOn, branchName, blockedReason, createdAt, updatedAt
+      touches, dependsOn, branchName, blockedReason, createdAt, updatedAt, pbiId
     ) VALUES (
       @taskId, @specId, @specVersion, @title, @description, @status,
-      @touches, @dependsOn, @branchName, @blockedReason, @createdAt, @updatedAt
+      @touches, @dependsOn, @branchName, @blockedReason, @createdAt, @updatedAt, @pbiId
     )
     ON CONFLICT(taskId) DO UPDATE SET
       specId = excluded.specId,
@@ -66,7 +67,8 @@ export function saveTask(task: TaskRecord): void {
       dependsOn = excluded.dependsOn,
       branchName = excluded.branchName,
       blockedReason = excluded.blockedReason,
-      updatedAt = excluded.updatedAt
+      updatedAt = excluded.updatedAt,
+      pbiId = excluded.pbiId
   `);
   stmt.run({
     taskId: task.taskId,
@@ -81,6 +83,7 @@ export function saveTask(task: TaskRecord): void {
     blockedReason: task.blockedReason,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    pbiId: task.pbiId,
   });
 }
 
@@ -90,6 +93,10 @@ export function getTask(taskId: string): TaskRecord | undefined {
 
 export function getTasksForSpec(specId: string): TaskRecord[] {
   return db.prepare('SELECT * FROM tasks WHERE specId = ? ORDER BY createdAt ASC').all(specId) as TaskRecord[];
+}
+
+export function getTasksForPbi(pbiId: string): TaskRecord[] {
+  return db.prepare('SELECT * FROM tasks WHERE pbiId = ? ORDER BY createdAt ASC').all(pbiId) as TaskRecord[];
 }
 
 export function deleteTasksForSpec(specId: string): void {

@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getGitSandbox, getWorkspaceRoot } from '../workspace';
 import { saveSpec, saveTask, getTasksForSpec, SpecRecord, TaskRecord } from '../db/taskStore';
+import { savePbi, getPbi, PbiRecord } from '../db/pbiStore';
+import { db } from '../db';
 import crypto from 'crypto';
 
 export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecRecord; tasks: TaskRecord[] } | null> {
@@ -11,7 +13,6 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
   if (!fs.existsSync(specPath)) {
     return null;
   }
-
   const specContent = fs.readFileSync(specPath, 'utf8');
 
   // 2. Get Git SHA
@@ -26,7 +27,41 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
 
   // 3. Define specId based on the relative path to avoid absolute path discrepancies
   const relativePath = path.relative(getWorkspaceRoot(), specPath);
-  const specId = 'spec-' + crypto.createHash('sha256').update(relativePath).digest('hex').substring(0, 12);
+  let specId = 'spec-' + crypto.createHash('sha256').update(relativePath).digest('hex').substring(0, 12);
+
+  // Check if we already have a record for this exact filePath
+  const existingSpecByPath = db.prepare('SELECT * FROM specs WHERE filePath = ?').get(relativePath) as SpecRecord | undefined;
+  if (existingSpecByPath) {
+    specId = existingSpecByPath.specId;
+  } else {
+    // Look for a moved/renamed spec
+    const allSpecs = db.prepare('SELECT * FROM specs').all() as SpecRecord[];
+    const missingSpecs = allSpecs.filter(s => !fs.existsSync(path.resolve(getWorkspaceRoot(), s.filePath)));
+    
+    let migratedSpecId = null;
+    if (missingSpecs.length > 0) {
+      const basenameMatch = missingSpecs.find(s => {
+        if (path.basename(s.filePath) !== path.basename(relativePath)) {
+          return false;
+        }
+        // Require identical parent folder name to avoid mismatches
+        if (path.basename(path.dirname(s.filePath)) !== path.basename(path.dirname(relativePath))) {
+          return false;
+        }
+        return true;
+      });
+
+      if (basenameMatch) {
+        migratedSpecId = basenameMatch.specId;
+      }
+    }
+
+    if (migratedSpecId) {
+      db.prepare('UPDATE specs SET filePath = ?, version = ?, createdAt = ? WHERE specId = ?')
+        .run(relativePath, gitSha, Date.now(), migratedSpecId);
+      specId = migratedSpecId;
+    }
+  }
 
   // 4. Save Spec
   const spec: SpecRecord = {
@@ -36,6 +71,21 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
     createdAt: Date.now(),
   };
   saveSpec(spec);
+
+  // Create and save catch-all PBI per spec
+  const pbiId = specId + '-pbi-default';
+  const existingPbi = getPbi(pbiId);
+  const catchAllPbi: PbiRecord = {
+    pbiId,
+    specId,
+    title: 'Default PBI',
+    description: 'Catch-all Product Backlog Item for the specification.',
+    status: existingPbi ? existingPbi.status : 'pending',
+    dependsOn: null,
+    createdAt: existingPbi ? existingPbi.createdAt : Date.now(),
+    updatedAt: existingPbi ? existingPbi.updatedAt : Date.now(),
+  };
+  savePbi(catchAllPbi);
 
   // 5. Parse Tasks from specContent
   const lines = specContent.split('\n');
@@ -53,7 +103,7 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
       line.match(/^#+\s*(?:Step|Task)?\s*(\d+)\s*[:.-]\s*(.+)$/i) ||
       line.match(/^#+\s*(?:Step|Task)\s+(\d+)\s*(.*)$/i) ||
       line.match(/^#+\s*(\d+)\s*[:.-]\s*(.+)$/i);
-    
+      
     // Check for list items like: - Step 1: ... or - [ ] Task 1 - ...
     const listMatch =
       line.match(/^\s*[-*+]\s*(?:\[[ xX]?\])?\s*(?:Step|Task)?\s*(\d+)\s*[:.-]\s*(.+)$/i) ||
@@ -121,13 +171,13 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
   for (let i = 0; i < parsedSteps.length; i++) {
     const step = parsedSteps[i];
     if (!step) continue;
+
     const taskId = `${specId}-step-${i + 1}`;
     
     // Check if the task already exists
     const existing = existingMap.get(taskId);
     
     const dependsOn = i > 0 ? JSON.stringify([`${specId}-step-${i}`]) : null;
-
     const task: TaskRecord = {
       taskId,
       specId,
@@ -141,8 +191,8 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
       blockedReason: existing ? existing.blockedReason : null,
       createdAt: existing ? existing.createdAt : Date.now(),
       updatedAt: Date.now(),
+      pbiId,
     };
-
     saveTask(task);
     tasks.push(task);
   }
