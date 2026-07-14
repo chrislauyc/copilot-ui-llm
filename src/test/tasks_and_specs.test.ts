@@ -211,13 +211,16 @@ Details A`;
     // Initial decomposition
     const res1 = await decomposeSpecIntoTasks(originalDir);
     expect(res1).not.toBeNull();
+    if (!res1) throw new Error('res1 is null');
     const originalSpecId = res1.spec.specId;
     const originalTasks = res1.tasks;
     expect(originalTasks.length).toBe(1);
 
     // Save one task as done to verify state preservation
+    const firstTask = originalTasks[0];
+    if (!firstTask) throw new Error('firstTask is undefined');
     saveTask({
-      ...originalTasks[0],
+      ...firstTask,
       status: 'done',
       updatedAt: Date.now()
     });
@@ -237,9 +240,12 @@ Details A`;
     // Run decomposition on the new directory
     const res2 = await decomposeSpecIntoTasks(movedDir);
     expect(res2).not.toBeNull();
+    if (!res2) throw new Error('res2 is null');
     expect(res2.spec.specId).toBe(originalSpecId);
     expect(res2.tasks.length).toBe(1);
-    expect(res2.tasks[0].status).toBe('done'); // Verified task state is preserved!
+    const movedTask = res2.tasks[0];
+    if (!movedTask) throw new Error('movedTask is undefined');
+    expect(movedTask.status).toBe('done'); // Verified task state is preserved!
 
     // Clean up moved files/folders
     if (fs.existsSync(movedPath)) {

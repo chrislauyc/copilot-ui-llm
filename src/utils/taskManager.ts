@@ -58,16 +58,18 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
         migratedSpecId = basenameMatch.specId;
       } else if (missingSpecs.length === 1 && allSpecs.length === 1) {
         const singleMissing = missingSpecs[0];
-        let allowed = true;
-        if (process.env.NODE_ENV === 'test') {
-          const sIsSpecTasks = singleMissing.filePath.includes('spec-tasks-dir');
-          const relIsSpecTasks = relativePath.includes('spec-tasks-dir');
-          if (sIsSpecTasks !== relIsSpecTasks) {
-            allowed = false;
+        if (singleMissing) {
+          let allowed = true;
+          if (process.env.NODE_ENV === 'test') {
+            const sIsSpecTasks = singleMissing.filePath.includes('spec-tasks-dir');
+            const relIsSpecTasks = relativePath.includes('spec-tasks-dir');
+            if (sIsSpecTasks !== relIsSpecTasks) {
+              allowed = false;
+            }
           }
-        }
-        if (allowed) {
-          migratedSpecId = singleMissing.specId;
+          if (allowed) {
+            migratedSpecId = singleMissing.specId;
+          }
         }
       }
     }

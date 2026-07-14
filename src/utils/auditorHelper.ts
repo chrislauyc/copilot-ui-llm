@@ -137,7 +137,7 @@ export function buildAuditorSessionSettings(
       const allowed = !requestedTool || requestedTool === toolName || 
                       (Array.isArray(record.toolCalls) && record.toolCalls.every((tc: unknown) => 
                         tc && typeof tc === 'object' && ((tc as Record<string, unknown>).function as Record<string, unknown> | undefined)?.name === toolName));
-      return allowed ? { kind: 'approve-once' } : { kind: 'reject', reason: 'Auditor sessions must not execute tools.' };
+      return allowed ? { kind: 'approve-once' } : { kind: 'reject', feedback: 'Auditor sessions must not execute tools.' };
     },
     streaming: false,
   };
