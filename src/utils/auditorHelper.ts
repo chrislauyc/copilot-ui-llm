@@ -255,13 +255,13 @@ export async function executeAuditSession<T>(
         `(attempt ${attempt}/${maxRetries}); resuming session with restricted toolset...`
       );
       
-      const retrySettings = buildAuditorSessionSettings(
-        executionConfig,
-        systemPrompt,
-        tool,
-        (args) => { result = args as T; },
-        { toolChoice: responseRequirements.toolChoice }
-      );
+      // const retrySettings = buildAuditorSessionSettings(
+      //   executionConfig,
+      //   systemPrompt,
+      //   tool,
+      //   (args) => { result = args as T; },
+      //   { toolChoice: responseRequirements.toolChoice }
+      // );
       
       const nudge = lastAssistantText.trim()
         ? `You did not call '${toolName}'. Your last message was:
@@ -274,14 +274,7 @@ You must now call '${toolName}' with your findings. Do not respond conversationa
         : `You ended your turn without calling '${toolName}'. You must now call '${toolName}' with your findings. Do not respond conversationally and do not call any other tool -- call '${toolName}' now.`;
         
       session = await client.resumeSession(sessionId, {
-        ...retrySettings,
         availableTools: [toolName],
-        systemMessage: {
-          mode: 'append',
-          content: `
-
-IMPORTANT: ${nudge}`
-        },
       } as SessionConfig & { autoApproveAll?: boolean });
       
       sessionId = session.sessionId;
