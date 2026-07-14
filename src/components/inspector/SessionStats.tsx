@@ -43,8 +43,10 @@ export function SessionStats({ bundledEvents }: SessionStatsProps) {
     let totalLatency = 0;
     let totalNanoAiu = 0;
     events.forEach(e => {
-      const data = e.sessionEvent.data as any;
-      if (data?.toolTelemetry?.executionTimeMs) totalLatency += data.toolTelemetry.executionTimeMs;
+      if (e.sessionEvent.type === 'tool.execution_complete' && 'toolTelemetry' in e.sessionEvent.data && typeof e.sessionEvent.data.toolTelemetry === 'object' && e.sessionEvent.data.toolTelemetry !== null) {
+        const telemetry = (e.sessionEvent.data.toolTelemetry as { executionTimeMs?: number });
+        if (telemetry.executionTimeMs) totalLatency += telemetry.executionTimeMs;
+      }
       
       const eventNano = findTotalNanoAiu(e);
       totalNanoAiu += eventNano;

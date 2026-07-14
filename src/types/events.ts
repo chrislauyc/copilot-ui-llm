@@ -18,6 +18,9 @@ export interface GateResultData {
 
 export interface LoopRetryData {
   readonly retryCount: number;
+  readonly maxRetries?: number;
+  readonly currentModel?: string;
+  readonly failedGate?: string;
   readonly feedback: string;
   readonly nextModel: string;
 }
@@ -30,6 +33,7 @@ export interface LoopCompleteData {
 
 export interface LoopEscalateHumanData {
   readonly summary: string;
+  readonly failedGate?: string;
 }
 
 export interface LoopClarityCheckFailedData {
@@ -99,7 +103,10 @@ export type CustomEventData =
   | ComposerPlanEvent
   | ComposerPlanMutatedEvent
   | { readonly type: 'gate.legacyAudit'; readonly data: unknown }
-  | TurnCompletedEvent;
+  | TurnCompletedEvent
+  | { readonly type: 'turn.start'; readonly turnIndex?: number; readonly label?: string; readonly data?: unknown }
+  | { readonly type: 'subtask.start'; readonly turnIndex?: number; readonly subtaskId?: string; readonly data?: unknown }
+  | { readonly type: 'subtask.complete'; readonly success?: boolean; readonly data?: unknown };
 
 /**
  * Extended SessionEvent that including our custom cycle events.

@@ -59,7 +59,7 @@ export async function sweepStaleSessions({
     }
 
     try {
-      await record.copilotSession.disconnect();
+      await record.copilotSession?.disconnect();
     } catch (err) {
       writeLog(`[Session GC] Failed to disconnect stale session ${sessionId}: ${err}`);
     }
@@ -78,8 +78,9 @@ export function startSessionGarbageCollector(
     });
   }, sweepIntervalMs);
 
-  if (typeof (timer as any).unref === 'function') {
-    (timer as any).unref();
+  const t = timer as unknown as { unref?: () => void };
+  if (typeof t.unref === 'function') {
+    t.unref();
   }
 
   return () => clearInterval(timer);
