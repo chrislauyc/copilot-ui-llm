@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getGitSandbox, getWorkspaceRoot } from '../workspace';
 import { saveSpec, saveTask, getTasksForSpec, SpecRecord, TaskRecord } from '../db/taskStore';
+import { savePbi, PbiRecord } from '../db/pbiStore';
 import crypto from 'crypto';
 
 export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecRecord; tasks: TaskRecord[] } | null> {
@@ -11,7 +12,6 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
   if (!fs.existsSync(specPath)) {
     return null;
   }
-
   const specContent = fs.readFileSync(specPath, 'utf8');
 
   // 2. Get Git SHA
@@ -37,6 +37,20 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
   };
   saveSpec(spec);
 
+  // Create and save catch-all PBI per spec
+  const pbiId = specId + '-pbi-default';
+  const catchAllPbi: PbiRecord = {
+    pbiId,
+    specId,
+    title: 'Default PBI',
+    description: 'Catch-all Product Backlog Item for the specification.',
+    status: 'pending',
+    dependsOn: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  savePbi(catchAllPbi);
+
   // 5. Parse Tasks from specContent
   const lines = specContent.split('\n');
   const parsedSteps: { title: string; description: string }[] = [];
@@ -53,7 +67,7 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
       line.match(/^#+\s*(?:Step|Task)?\s*(\d+)\s*[:.-]\s*(.+)$/i) ||
       line.match(/^#+\s*(?:Step|Task)\s+(\d+)\s*(.*)$/i) ||
       line.match(/^#+\s*(\d+)\s*[:.-]\s*(.+)$/i);
-    
+      
     // Check for list items like: - Step 1: ... or - [ ] Task 1 - ...
     const listMatch =
       line.match(/^\s*[-*+]\s*(?:\[[ xX]?\])?\s*(?:Step|Task)?\s*(\d+)\s*[:.-]\s*(.+)$/i) ||
@@ -121,13 +135,13 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
   for (let i = 0; i < parsedSteps.length; i++) {
     const step = parsedSteps[i];
     if (!step) continue;
+
     const taskId = `${specId}-step-${i + 1}`;
     
     // Check if the task already exists
     const existing = existingMap.get(taskId);
     
     const dependsOn = i > 0 ? JSON.stringify([`${specId}-step-${i}`]) : null;
-
     const task: TaskRecord = {
       taskId,
       specId,
@@ -141,8 +155,8 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
       blockedReason: existing ? existing.blockedReason : null,
       createdAt: existing ? existing.createdAt : Date.now(),
       updatedAt: Date.now(),
+      pbiId,
     };
-
     saveTask(task);
     tasks.push(task);
   }
