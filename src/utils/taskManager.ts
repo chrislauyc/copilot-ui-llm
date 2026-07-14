@@ -48,7 +48,7 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
     status: existingPbi ? existingPbi.status : 'pending',
     dependsOn: null,
     createdAt: existingPbi ? existingPbi.createdAt : Date.now(),
-    updatedAt: Date.now(),
+    updatedAt: existingPbi ? existingPbi.updatedAt : Date.now(),
   };
   savePbi(catchAllPbi);
 
