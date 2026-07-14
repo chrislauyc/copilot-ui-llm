@@ -112,8 +112,26 @@ export function buildAuditorSessionSettings(
     model: executionConfig.model,
     ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
     systemMessage: {
-      mode: 'replace',
-      content: systemPrompt
+        mode: "customize",
+        sections: {
+            tone: {
+                action: "remove"
+            },
+            code_change_rules: { action: "remove" },
+            guidelines: {
+                action: "remove"
+            },
+            tool_instructions: { action: "preserve" },
+            environment_context: { action: "preserve" },
+            tool_efficiency: { action: "preserve" },
+            preamble: { action: "remove" },
+            identity: { action: "remove" },
+            safety: { action: "remove" },
+            custom_instructions: { action: "remove" },
+            runtime_instructions: { action: "remove" },
+            last_instructions: { action: "remove" }
+        },
+        content: systemPrompt,
     },
     tools: [
       {
