@@ -124,7 +124,7 @@ export function buildAuditorSessionSettings(
             // tool_instructions: { action: "preserve" },
             // environment_context: { action: "preserve" },
             // tool_efficiency: { action: "preserve" },
-            // preamble: { action: "remove" },
+            preamble: { action: "remove" },
             // identity: { action: "remove" },
             safety: { action: "remove" },
             custom_instructions: { action: "remove" },
