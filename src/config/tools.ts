@@ -122,6 +122,11 @@ export const submitCodeReviewTool = {
                 enum: ["blocking", "suggestion", "nit"],
                 description: "How serious the finding is."
               },
+              category: {
+                type: "string",
+                enum: ["bug", "security", "performance", "style"],
+                description: "Optional category of the finding."
+              },
               file: { type: "string", description: "File path the finding applies to." },
               line: { type: "number", description: "Line number in the new version of the file, if applicable." },
               message: { type: "string", description: "Description of the issue or suggestion." },
@@ -131,7 +136,7 @@ export const submitCodeReviewTool = {
                 description: "Set 'resolved' if the diff shows it has been fixed, 'still-open' if it persists, or 'new' if it's a blocking issue you're raising for the first time."
               }
             },
-            required: ["severity", "file", "message", "status"]
+            required: ["severity", "file", "message", "status", "category"]
           }
         },
         summary: {
