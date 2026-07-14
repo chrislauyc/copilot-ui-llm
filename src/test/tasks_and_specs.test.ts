@@ -167,4 +167,38 @@ Details B`;
     expect(res2?.tasks[0]?.status).toBe('done');
     expect(res2?.tasks[1]?.status).toBe('pending');
   });
+
+  it('should persist PBI status across re-decompositions', async () => {
+    const specContent = `# Spec
+## Step 1: Task A
+Details A`;
+
+    const specFile = path.join(mockCwd, 'architecture-spec.md');
+    fs.writeFileSync(specFile, specContent, 'utf8');
+
+    // First decomposition
+    const res1 = await decomposeSpecIntoTasks('test-spec-tasks-dir');
+    expect(res1?.tasks.length).toBe(1);
+    
+    const pbiId = res1?.tasks[0]?.pbiId;
+    expect(pbiId).toBeDefined();
+    
+    const pbi = getPbi(pbiId!);
+    expect(pbi).toBeDefined();
+    expect(pbi?.status).toBe('pending');
+
+    // Change status of the catch-all PBI to done
+    savePbi({
+      ...pbi!,
+      status: 'done',
+      updatedAt: Date.now()
+    });
+
+    // Run decomposition again
+    const res2 = await decomposeSpecIntoTasks('test-spec-tasks-dir');
+    expect(res2?.tasks.length).toBe(1);
+
+    const pbiUpdated = getPbi(pbiId!);
+    expect(pbiUpdated?.status).toBe('done');
+  });
 });

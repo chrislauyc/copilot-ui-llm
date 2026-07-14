@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getGitSandbox, getWorkspaceRoot } from '../workspace';
 import { saveSpec, saveTask, getTasksForSpec, SpecRecord, TaskRecord } from '../db/taskStore';
-import { savePbi, PbiRecord } from '../db/pbiStore';
+import { savePbi, getPbi, PbiRecord } from '../db/pbiStore';
 import crypto from 'crypto';
 
 export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecRecord; tasks: TaskRecord[] } | null> {
@@ -39,14 +39,15 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
 
   // Create and save catch-all PBI per spec
   const pbiId = specId + '-pbi-default';
+  const existingPbi = getPbi(pbiId);
   const catchAllPbi: PbiRecord = {
     pbiId,
     specId,
     title: 'Default PBI',
     description: 'Catch-all Product Backlog Item for the specification.',
-    status: 'pending',
+    status: existingPbi ? existingPbi.status : 'pending',
     dependsOn: null,
-    createdAt: Date.now(),
+    createdAt: existingPbi ? existingPbi.createdAt : Date.now(),
     updatedAt: Date.now(),
   };
   savePbi(catchAllPbi);
