@@ -36,6 +36,7 @@ describe('Git Sandbox Branch Management', () => {
       blockedReason: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      pbiId: null,
     });
 
     // Verify task initially has no branch name
