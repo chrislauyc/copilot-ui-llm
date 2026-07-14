@@ -121,14 +121,14 @@ export function buildAuditorSessionSettings(
             guidelines: {
                 action: "remove"
             },
-            tool_instructions: { action: "preserve" },
-            environment_context: { action: "preserve" },
-            tool_efficiency: { action: "preserve" },
-            preamble: { action: "remove" },
-            identity: { action: "remove" },
+            // tool_instructions: { action: "preserve" },
+            // environment_context: { action: "preserve" },
+            // tool_efficiency: { action: "preserve" },
+            // preamble: { action: "remove" },
+            // identity: { action: "remove" },
             safety: { action: "remove" },
             custom_instructions: { action: "remove" },
-            runtime_instructions: { action: "remove" },
+            // runtime_instructions: { action: "remove" },
             last_instructions: { action: "remove" }
         },
         content: systemPrompt,
