@@ -120,7 +120,7 @@ export const submitCodeReviewTool = {
               severity: {
                 type: "string",
                 enum: ["blocking", "suggestion", "nit"],
-                description: "How serious the finding is. Purely for comment formatting -- does not gate anything."
+                description: "How serious the finding is."
               },
               file: { type: "string", description: "File path the finding applies to." },
               line: { type: "number", description: "Line number in the new version of the file, if applicable." },
@@ -128,10 +128,10 @@ export const submitCodeReviewTool = {
               status: {
                 type: "string",
                 enum: ["new", "still-open", "resolved"],
-                description: "Only set this for 'blocking' findings that were listed in the 'Previously reported blocking findings' section of the prompt. Set 'resolved' if the diff shows it has been fixed, 'still-open' if it persists, or 'new' if it's a blocking issue you're raising for the first time. Omit for suggestion/nit findings, and omit for blocking findings that have no prior-round counterpart (those are implicitly 'new')."
+                description: "Set 'resolved' if the diff shows it has been fixed, 'still-open' if it persists, or 'new' if it's a blocking issue you're raising for the first time."
               }
             },
-            required: ["severity", "file", "message"]
+            required: ["severity", "file", "message", "status"]
           }
         },
         summary: {
