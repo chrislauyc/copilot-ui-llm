@@ -92,9 +92,3 @@ const tasksColumns = db.pragma('table_info(tasks)') as { name: string }[];
 if (!tasksColumns.some(col => col.name === 'pbiId')) {
   db.prepare('ALTER TABLE tasks ADD COLUMN pbiId TEXT REFERENCES pbis(pbiId)').run();
 }
-
-try {
-  db.prepare('ALTER TABLE tasks ADD COLUMN pbiId TEXT REFERENCES pbis(pbiId)').run();
-} catch (e) {
-  // Ignored if column already exists or table is empty
-}

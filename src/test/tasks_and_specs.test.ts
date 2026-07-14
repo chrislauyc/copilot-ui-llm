@@ -201,4 +201,52 @@ Details A`;
     const pbiUpdated = getPbi(pbiId!);
     expect(pbiUpdated?.status).toBe('done');
   });
+
+  it('should migrate specId and associated tasks/PBIs when the spec file is moved/renamed', async () => {
+    const specContent = '# Spec\n## Step 1: Task A\nDetails A';
+    const originalDir = 'test-spec-tasks-dir';
+    const originalPath = path.join(getWorkspaceRoot(), originalDir, 'architecture-spec.md');
+    fs.writeFileSync(originalPath, specContent, 'utf8');
+
+    // Initial decomposition
+    const res1 = await decomposeSpecIntoTasks(originalDir);
+    expect(res1).not.toBeNull();
+    const originalSpecId = res1.spec.specId;
+    const originalTasks = res1.tasks;
+    expect(originalTasks.length).toBe(1);
+
+    // Save one task as done to verify state preservation
+    saveTask({
+      ...originalTasks[0],
+      status: 'done',
+      updatedAt: Date.now()
+    });
+
+    // Clean up original file to simulate moving it
+    fs.unlinkSync(originalPath);
+
+    // Write to a new directory
+    const movedDir = 'moved-spec-tasks-dir';
+    const movedDirFull = path.join(getWorkspaceRoot(), movedDir);
+    if (!fs.existsSync(movedDirFull)) {
+      fs.mkdirSync(movedDirFull, { recursive: true });
+    }
+    const movedPath = path.join(movedDirFull, 'architecture-spec.md');
+    fs.writeFileSync(movedPath, specContent, 'utf8');
+
+    // Run decomposition on the new directory
+    const res2 = await decomposeSpecIntoTasks(movedDir);
+    expect(res2).not.toBeNull();
+    expect(res2.spec.specId).toBe(originalSpecId);
+    expect(res2.tasks.length).toBe(1);
+    expect(res2.tasks[0].status).toBe('done'); // Verified task state is preserved!
+
+    // Clean up moved files/folders
+    if (fs.existsSync(movedPath)) {
+      fs.unlinkSync(movedPath);
+    }
+    if (fs.existsSync(movedDirFull)) {
+      fs.rmdirSync(movedDirFull);
+    }
+  });
 });
