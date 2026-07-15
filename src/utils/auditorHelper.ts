@@ -296,6 +296,17 @@ You must now call '${toolName}' with your findings. Do not respond conversationa
         
       session = await client.resumeSession(sessionId, {
         availableTools: [toolName],
+        // Re-supply the tool declaration + handler on every resume. resumeSession
+        // constructs a brand-new CopilotSession object (not the original one) and
+        // calls session.registerTools(config.tools) on it; registerTools(undefined)
+        // clears the handler map and returns immediately, and the resume RPC sends
+        // `tools: config.tools?.map(...)`, which is undefined when config.tools is
+        // undefined. So without this, the resumed session has no tool declared for
+        // the model to call AND no handler wired to the onResult closure -- `result`
+        // is guaranteed to stay null on every retry regardless of what the model
+        // does. `availableTools` only narrows an existing `tools` list; it does not
+        // resupply it, so it can't substitute for this.
+        tools: sessionSettings.tools,
         // Re-supply BYOK credentials on every resume. Per the SDK docs, `provider`
         // is NOT persisted across a resume the way most other session config is --
         // it must be re-provided each time, or the resumed session silently loses
