@@ -44,7 +44,7 @@ export interface Scenario {
   readonly turns?: readonly TurnData[];
 }
 
-export const RAW_STANDARD_DEBUG: SessionEvent[] = [
+export const RAW_STANDARD_DEBUG: ExtendedSessionEvent[] = [
   {
     id: 'pay-001',
     parentId: null,
@@ -63,7 +63,7 @@ export const RAW_STANDARD_DEBUG: SessionEvent[] = [
         branch: 'main'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-002',
     parentId: 'pay-001',
@@ -80,7 +80,7 @@ export const RAW_STANDARD_DEBUG: SessionEvent[] = [
         }
       ]
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-003',
     parentId: 'pay-002',
@@ -90,7 +90,7 @@ export const RAW_STANDARD_DEBUG: SessionEvent[] = [
       reasoningId: 'reasoning-01',
       content: "The user complains about a startup crash and health route clash in server.ts. First, let me check the git status or git diff on server.ts to see what was recently edited. I'll invoke the git_diff tool to see what changes exist."
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-004',
     parentId: 'pay-003',
@@ -105,7 +105,7 @@ export const RAW_STANDARD_DEBUG: SessionEvent[] = [
         contextLines: 5
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-005',
     parentId: 'pay-004',
@@ -143,7 +143,7 @@ index d83f7d1..a9238eb 100644
         executionTimeMs: 530
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-006',
     parentId: 'pay-005',
@@ -153,7 +153,7 @@ index d83f7d1..a9238eb 100644
       reasoningId: 'reasoning-02',
       content: 'Looking at the git diff on server.ts, someone added a wildcard router `app.use("/api/*", ...)` *before* the `/api/health` route. In Express, route resolution goes sequentially! The wildcard middleware intercepts `/api/health`, does not call `next()`, and immediately sends a `500 Access Denied` response. This is why `/api/health` returns an error, or crashes if process.uptime is not handled. I need to move `/api/health` ABOVE the blocking wildcard, or rewrite the wildcard middleware to properly check and delegate. I will first propose moving the health check above the wildcard.'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-007',
     parentId: 'pay-006',
@@ -184,7 +184,7 @@ I will fix this layout issue by re-ordering the route declarations:
 
 Let me apply this edit to \`server.ts\` right now.`
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-008',
     parentId: 'pay-007',
@@ -218,7 +218,7 @@ app.use("/api/*", (req, res, next) => {
         canOfferSessionApproval: false
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-009',
     parentId: 'pay-008',
@@ -230,7 +230,7 @@ app.use("/api/*", (req, res, next) => {
         kind: 'approved'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-010',
     parentId: 'pay-009',
@@ -244,7 +244,7 @@ app.use("/api/*", (req, res, next) => {
         targetChunk: 'app.use("/api/*", ... app.get("/api/health" ...'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-011',
     parentId: 'pay-010',
@@ -260,7 +260,7 @@ app.use("/api/*", (req, res, next) => {
         content: 'File server.ts edited successfully. 18 lines updated.'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-012',
     parentId: 'pay-011',
@@ -273,7 +273,7 @@ app.use("/api/*", (req, res, next) => {
         project: './tsconfig.json'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-013',
     parentId: 'pay-012',
@@ -292,7 +292,7 @@ app.use("/api/*", (req, res, next) => {
         content: "server.ts(21,20): error TS2304: Cannot find name 'processs'. Did you mean 'process'?"
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-014',
     parentId: 'pay-013',
@@ -304,7 +304,7 @@ app.use("/api/*", (req, res, next) => {
       message: "TS2304: Cannot find name 'processs' at server.ts:21",
       stack: 'Compiler found an unresolved identifier "processs" at line 21, likely introduced by manual input or a keyboard bounce.'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-015',
     parentId: 'pay-014',
@@ -314,7 +314,7 @@ app.use("/api/*", (req, res, next) => {
       reasoningId: 'reasoning-03',
       content: 'Ah! In editing the file, there was a minor keyboard slip resulting in "processs.uptime()" instead of "process.uptime()". Let me issue another quick search/replace edit to replace "processs" with "process" to correct the compilation.'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-016',
     parentId: 'pay-015',
@@ -329,7 +329,7 @@ app.use("/api/*", (req, res, next) => {
         replaceWith: 'process.uptime()'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-017',
     parentId: 'pay-016',
@@ -345,7 +345,7 @@ app.use("/api/*", (req, res, next) => {
         content: 'File server.ts edited successfully. Corrected "processs" -> "process".'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-018',
     parentId: 'pay-017',
@@ -358,7 +358,7 @@ app.use("/api/*", (req, res, next) => {
         project: './tsconfig.json'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-019',
     parentId: 'pay-018',
@@ -374,7 +374,7 @@ app.use("/api/*", (req, res, next) => {
         content: 'TS compilation succeeded with 0 warnings or errors.'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-020',
     parentId: 'pay-019',
@@ -393,7 +393,7 @@ Here is the verified status:
 
 Everything is compiled and is fully ready. Let me know if you would like me to stage these changes and make a draft commit next!`
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-021',
     parentId: 'pay-020',
@@ -410,10 +410,10 @@ Everything is compiled and is fully ready. Let me know if you would like me to s
         linesRemoved: 3
       }
     }
-  } as any
+  } as unknown as ExtendedSessionEvent
 ];
 
-export const RAW_SECURITY_DENIAL: SessionEvent[] = [
+export const RAW_SECURITY_DENIAL: ExtendedSessionEvent[] = [
   {
     id: 'pay-201',
     parentId: null,
@@ -432,7 +432,7 @@ export const RAW_SECURITY_DENIAL: SessionEvent[] = [
         branch: 'feature/auth'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-202',
     parentId: 'pay-201',
@@ -442,7 +442,7 @@ export const RAW_SECURITY_DENIAL: SessionEvent[] = [
       content: 'Let\'s run our database seeding migrations tool and inspect the confidential environment parameters on .env to confirm Stripe details.',
       agentMode: 'interactive'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-203',
     parentId: 'pay-202',
@@ -452,7 +452,7 @@ export const RAW_SECURITY_DENIAL: SessionEvent[] = [
       reasoningId: 'reasoning-20',
       content: 'The user wants to read .env to inspect Stripe credentials and execute a DB migration. Reading .env requires reading file keys which could contain secrets. I will issue a permission requested event for file inspection of `.env` to protect security bounds.'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-204',
     parentId: 'pay-203',
@@ -471,7 +471,7 @@ export const RAW_SECURITY_DENIAL: SessionEvent[] = [
         possibleUrls: []
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-205',
     parentId: 'pay-204',
@@ -483,7 +483,7 @@ export const RAW_SECURITY_DENIAL: SessionEvent[] = [
         kind: 'denied-interactively-by-user'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-206',
     parentId: 'pay-205',
@@ -493,7 +493,7 @@ export const RAW_SECURITY_DENIAL: SessionEvent[] = [
       reasoningId: 'reasoning-21',
       content: 'The permission to view Stripe secret variables from `.env` was explicitly rejected by the operator. I must halt secret inspection immediately, acknowledge the security block gracefully, and offer to proceed with non-sensitive migrations instead.'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-207',
     parentId: 'pay-206',
@@ -511,7 +511,7 @@ To safeguard your API config:
 
 Please let me know if you want me to initiate db migration scripts independently without reading secret keys!`
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-208',
     parentId: 'pay-207',
@@ -528,10 +528,10 @@ Please let me know if you want me to initiate db migration scripts independently
         linesRemoved: 0
       }
     }
-  } as any
+  } as unknown as ExtendedSessionEvent
 ];
 
-export const RAW_LARGE_BINARY_OUTPUTS: SessionEvent[] = [
+export const RAW_LARGE_BINARY_OUTPUTS: ExtendedSessionEvent[] = [
   {
     id: 'pay-301',
     parentId: null,
@@ -550,7 +550,7 @@ export const RAW_LARGE_BINARY_OUTPUTS: SessionEvent[] = [
         branch: 'main'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-302',
     parentId: 'pay-301',
@@ -560,7 +560,7 @@ export const RAW_LARGE_BINARY_OUTPUTS: SessionEvent[] = [
       content: 'Generate a high-contrast architectural data visualization of our system modules distribution layout.',
       agentMode: 'autopilot'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-303',
     parentId: 'pay-302',
@@ -570,7 +570,7 @@ export const RAW_LARGE_BINARY_OUTPUTS: SessionEvent[] = [
       reasoningId: 'reasoning-30',
       content: 'The operator requests system architectural mapping. I will trigger the rendering engine utilizing the system visualization tool to output a rich diagnostic diagram layout.'
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-304',
     parentId: 'pay-303',
@@ -586,7 +586,7 @@ export const RAW_LARGE_BINARY_OUTPUTS: SessionEvent[] = [
         palette: 'cool_metal'
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-305',
     parentId: 'pay-304',
@@ -613,7 +613,7 @@ export const RAW_LARGE_BINARY_OUTPUTS: SessionEvent[] = [
         executionTimeMs: 820
       }
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-306',
     parentId: 'pay-305',
@@ -631,7 +631,7 @@ I have completed rendering the multi-modal dependency layout topology plot repre
 
 The graphical asset vector visual is attached directly below in the tool summary trace.`
     }
-  } as any,
+  } as unknown as ExtendedSessionEvent,
   {
     id: 'pay-307',
     parentId: 'pay-306',
@@ -648,7 +648,7 @@ The graphical asset vector visual is attached directly below in the tool summary
         linesRemoved: 0
       }
     }
-  } as any
+  } as unknown as ExtendedSessionEvent
 ];
 
 export function getEventTelemetryUsage(evt: CopilotEvent, baseMultiplier: number = 1.0): TelemetryUsage {
@@ -657,8 +657,8 @@ export function getEventTelemetryUsage(evt: CopilotEvent, baseMultiplier: number
   let reasoningTokens = 0;
   let nanoAiu = 0;
 
-  const sEvt = evt?.sessionEvent || {} as any;
-  const sData = sEvt?.data as any;
+  const sEvt = evt?.sessionEvent || {} as unknown as ExtendedSessionEvent;
+  const sData = sEvt?.data as { content?: string; toolTelemetry?: { executionTimeMs?: number }; executionTimeMs?: number; result?: { content?: string; contents?: Array<{ type: string }> }; error?: { message?: string }; };
   const typeStr = sEvt?.type || '';
 
   switch (typeStr) {
@@ -687,7 +687,7 @@ export function getEventTelemetryUsage(evt: CopilotEvent, baseMultiplier: number
     case 'tool.execution_complete': {
       const dataSize = sData?.result?.content?.length || sData?.error?.message?.length || 100;
       completionTokens = Math.round(dataSize * 0.15 + 50);
-      const isBinary = Array.isArray(sData?.result?.contents) && sData.result.contents.some((c: any) => c && typeof c === 'object' && c.type === 'image');
+      const isBinary = Array.isArray(sData?.result?.contents) && sData.result.contents.some((c) => c && typeof c === 'object' && c.type === 'image');
       nanoAiu = isBinary ? 2800000000 : (250000000 + completionTokens * 200000);
       break;
     }
@@ -717,7 +717,7 @@ export function getEventTelemetryUsage(evt: CopilotEvent, baseMultiplier: number
   };
 }
 
-export function deriveCopilotEvents(rawEvents: SessionEvent[]): CopilotEvent[] {
+export function deriveCopilotEvents(rawEvents: ExtendedSessionEvent[]): CopilotEvent[] {
   let prevId: string | null = null;
   return rawEvents.map((evt, index) => {
     const timestamp = evt.timestamp || new Date().toISOString();
@@ -743,10 +743,10 @@ export function deriveCopilotEvents(rawEvents: SessionEvent[]): CopilotEvent[] {
     else if (type === 'user.message') title = 'User Message Received';
     else if (type === 'assistant.reasoning') title = 'Formulating Plan';
     else if (type === 'tool.execution_start') {
-      const sData = data as any;
+      const sData = data as { toolName?: string; toolDescription?: { name?: string } };
       title = `Tool Call: ${sData?.toolName || 'Unknown Tool'}`;
     } else if (type === 'tool.execution_complete') {
-      const sData = data as any;
+      const sData = data as { toolName?: string; toolDescription?: { name?: string } };
       const tName = sData?.toolDescription?.name || sData?.toolName || 'Unknown Tool';
       title = `Tool Result: ${tName}`;
     } else if (type === 'permission.requested') title = 'Permission Requested';

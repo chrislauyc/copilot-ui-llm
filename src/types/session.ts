@@ -63,7 +63,7 @@ export interface Turn {
 export interface SessionRecord {
   readonly sessionId: string;
   readonly taskId?: string;
-  readonly copilotSession: CopilotSession;
+  readonly copilotSession: CopilotSession | null;
   readonly currentModel: ModelTier;
   readonly cwd: string;
   readonly lastUsedAt: number;

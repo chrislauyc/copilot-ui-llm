@@ -1354,7 +1354,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           // Store new session in activeSessions for future reuse
           if (sessionId) {
             if (activeSessions.has(sessionId)) {
-              try { await activeSessions.get(sessionId)!.copilotSession.disconnect(); } catch (e) {}
+              try { await activeSessions.get(sessionId)!.copilotSession?.disconnect(); } catch (e) {}
             }
             activeSessions.set(sessionId, {
               sessionId,
