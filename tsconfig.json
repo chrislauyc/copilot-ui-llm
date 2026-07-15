@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "experimentalDecorators": true,
+    "strict": true,
     "useDefineForClassFields": false,
     "lib": [
       "ES2022",
@@ -34,6 +35,6 @@
     "resolveJsonModule": true,
     "maxNodeModuleJsDepth": 0
   },
-  "include": ["."],
+  "include": ["src", "server.ts", "scripts"],
   "exclude": ["node_modules"]
 }

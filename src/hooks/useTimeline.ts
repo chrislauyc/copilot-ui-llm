@@ -99,7 +99,7 @@ export function useTimeline(
       };
 
       events.forEach(evt => {
-        const type = evt.sessionEvent.type as any;
+        const type = evt.sessionEvent.type;
         const isRootEvent = 
           type === 'user.message' || 
           type === 'assistant.message' || 
@@ -217,7 +217,7 @@ export function useTimeline(
           
           // Find the failed gate result or exception event
           const failedEvent = t.events.find(
-            e => (e.sessionEvent.type === 'gate.result' && (e.sessionEvent.data as any)?.pass === false) ||
+            e => (e.sessionEvent.type === 'gate.result' && e.sessionEvent.data.pass === false) ||
                  (e.sessionEvent.type === 'loop.error')
           );
           if (failedEvent) {

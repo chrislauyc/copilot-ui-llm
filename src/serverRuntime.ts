@@ -1311,7 +1311,7 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
           session = {
             ...storedSession,
             sessionId,
-            copilotSession: null as any,
+            copilotSession: null,
             currentModel: storedSession.currentModel || 'gemini-3.1-flash-lite',
             cwd: storedSession.cwd || getWorkspaceRoot(),
             lastUsedAt: storedSession.lastUsedAt || Date.now(),
