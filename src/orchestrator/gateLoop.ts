@@ -14,7 +14,8 @@ import {
   Tool,
   SessionEvent,
   MessageOptions,
-  ToolExecutionCompleteContent
+  ToolExecutionCompleteContent,
+  defineTool
 } from '../copilotSdk/boundary';
 
 // From other files
@@ -846,19 +847,21 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (!isDiagnostic && !isResume) {
       writeLog(`[Ambiguity] Running pre-flight clarity check...`);
       try {
-        const clarityConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
+        const clarityConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
         let claritySession: CopilotSession = await client.createSession({
           model: clarityConfig.model,
           provider: clarityConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
-          tools: [{
-            name: AMBIGUITY_CHECK_TOOL.function.name,
-            description: AMBIGUITY_CHECK_TOOL.function.description,
-            parameters: AMBIGUITY_CHECK_TOOL.function.parameters,
-            handler: async () => {
-              return { status: 'success' };
-            }
-          } as Tool<unknown>],
+          tools: [
+            defineTool(
+              AMBIGUITY_CHECK_TOOL.function.name,
+              AMBIGUITY_CHECK_TOOL.function.description,
+              AMBIGUITY_CHECK_TOOL.function.parameters,
+              async () => {
+                return { status: 'success' };
+              }
+            )
+          ],
         });
         
         let clarityData: ClarityCheckData | null = null;
@@ -881,17 +884,19 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         };
         abortController.signal.addEventListener('abort', clarityAbortHandler);
         try {
-          const clarityConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
+          const clarityConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
           const runPromise = runForcedToolTurn(claritySession, clarityConfig, 'submit_clarity_check', formatClarityCheckPrompt(promptStr), {
             client,
             timeoutMs: 20000,
             getResult: () => clarityData,
-            tools: [{
-              name: AMBIGUITY_CHECK_TOOL.function.name,
-              description: AMBIGUITY_CHECK_TOOL.function.description,
-              parameters: AMBIGUITY_CHECK_TOOL.function.parameters,
-              handler: async () => { return { status: 'success' }; }
-            }] as Tool<unknown>[]
+            tools: [
+              defineTool(
+                AMBIGUITY_CHECK_TOOL.function.name,
+                AMBIGUITY_CHECK_TOOL.function.description,
+                AMBIGUITY_CHECK_TOOL.function.parameters,
+                async () => { return { status: 'success' }; }
+              )
+            ]
           });
           await Promise.race([runPromise, abortPromise]);
         } finally {
@@ -933,19 +938,21 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (!isDiagnostic && !isResume) {
       writeLog(`[Composer] Classifying task intent for: "${promptStr.substring(0, 50)}..."`);
       try {
-        const classificationConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
+        const classificationConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
         let classificationSession: CopilotSession = await client.createSession({
           model: classificationConfig.model,
           provider: classificationConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
-          tools: [{
-            name: COMPOSER_ROUTER_TOOL.function.name,
-            description: COMPOSER_ROUTER_TOOL.function.description,
-            parameters: COMPOSER_ROUTER_TOOL.function.parameters,
-            handler: async () => {
-              return { status: 'success' };
-            }
-          } as Tool<unknown>],
+          tools: [
+            defineTool(
+              COMPOSER_ROUTER_TOOL.function.name,
+              COMPOSER_ROUTER_TOOL.function.description,
+              COMPOSER_ROUTER_TOOL.function.parameters,
+              async () => {
+                return { status: 'success' };
+              }
+            )
+          ],
         });
                let toolArguments: ComposerRouteArguments | null = null;
         const unsub = classificationSession.on('tool.execution_start', (event) => {
@@ -971,12 +978,14 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             client,
             timeoutMs: 30000,
             getResult: () => toolArguments,
-            tools: [{
-              name: COMPOSER_ROUTER_TOOL.function.name,
-              description: COMPOSER_ROUTER_TOOL.function.description,
-              parameters: COMPOSER_ROUTER_TOOL.function.parameters,
-              handler: async () => { return { status: 'success' }; }
-            }] as Tool<unknown>[]
+            tools: [
+              defineTool(
+                COMPOSER_ROUTER_TOOL.function.name,
+                COMPOSER_ROUTER_TOOL.function.description,
+                COMPOSER_ROUTER_TOOL.function.parameters,
+                async () => { return { status: 'success' }; }
+              )
+            ]
           });
           await Promise.race([runPromise, abortPromise]);
         } finally {
@@ -1546,19 +1555,24 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
 
             writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`, LogLevel.DEBUG);
-            const turnResult: any = await Promise.race([
+            const turnResult = await Promise.race([
               runForcedToolTurn(session, loopExecutionConfig, RUN_TERMINAL_DOCKER_TOOL.function.name, currentPrompt, {
                 client,
                 timeoutMs: 600000,
                 maxRetries: 1,
-                getResult: () => toolWasCalledInThisTurn ? true : undefined,
+                getResult: () => undefined,
                 tools: loopSessionOptions.tools
               }),
               abortPromise
-            ]);
+            ]) as { result: unknown; session: CopilotSession; lastAssistantText: string; toolCalled: boolean } | undefined;
             
-            if (turnResult && turnResult.session) {
-              session = turnResult.session;
+            if (turnResult) {
+              if (turnResult.session) {
+                session = turnResult.session;
+              }
+              if (turnResult.toolCalled) {
+                toolWasCalledInThisTurn = true;
+              }
             }
             
             writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
