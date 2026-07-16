@@ -1,3 +1,4 @@
+import { runForcedToolTurn } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG } from '../config/models';
@@ -178,59 +179,6 @@ export function buildAuditorSessionSettings(
 }
 
 /**
- * How much of the model's last assistant message to include when we give up
- * retrying and throw. Long enough to diagnose, short enough not to flood logs.
- */
-const LAST_MESSAGE_TRUNCATE_LENGTH = 2000;
-
-function truncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}... [truncated, ${text.length} chars total]`;
-}
-
-/**
- * Attaches a listener that accumulates the assistant's text content for the
- * current turn so that, if the tool is never called, we have something
- * meaningful to report instead of a bare "returned null".
- * 
- * Returns a getter for the accumulated text and the unsubscribe function.
- */
-function trackLastAssistantMessage(session: CopilotSession): { readonly getText: () => string; readonly unsubscribe: () => void } {
-  let text = '';
-  const unsubscribe = session.on((event: unknown) => {
-    if (!event || typeof event !== 'object') return;
-    const ev = event as Record<string, unknown>;
-    const evData = ev.data as Record<string, unknown> | undefined;
-    if (ev.type === 'assistant.message') {
-      text += (evData?.content as string | undefined) || '';
-    } else if (ev.type === 'assistant.message_delta') {
-      text += (evData?.delta as string | undefined) || (evData?.content as string | undefined) || '';
-    }
-  });
-  return { getText: () => text, unsubscribe };
-}
-
-async function sendAndWaitWithAbort(
-  session: CopilotSession,
-  prompt: { readonly prompt: string },
-  timeoutMs: number,
-  abortSignal?: AbortSignal,
-): Promise<void> {
-  if (!abortSignal) {
-    await session.sendAndWait(prompt, timeoutMs);
-    return;
-  }
-  await Promise.race([
-    session.sendAndWait(prompt, timeoutMs),
-    new Promise<never>((_, reject) => {
-      const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
-      if (abortSignal.aborted) onAbort();
-      else abortSignal.addEventListener('abort', onAbort, { once: true });
-    })
-  ]);
-}
-
-/**
  * Manages the lifecycle of a CopilotClient (start/stop) and executes an audit
  * turn, retrying with a restricted toolset if the model ends its turn without
  * calling the target tool.
@@ -274,83 +222,18 @@ export async function executeAuditSession<T>(
     console.log(`[executeAuditSession] session created: ${session.sessionId}`);
     onSessionId?.(session.sessionId);
     
-    let tracker = trackLastAssistantMessage(session);
     console.log('[executeAuditSession] sending and waiting for response...');
-    await sendAndWaitWithAbort(session, { prompt: userPrompt }, timeoutMs, abortSignal);
-    lastAssistantText = tracker.getText();
-    tracker.unsubscribe();
+    const turnResult = await runForcedToolTurn(session, executionConfig, toolName, userPrompt, {
+      client,
+      abortSignal,
+      timeoutMs,
+      maxRetries,
+      getResult: () => result,
+      tools: sessionSettings.tools,
+      responseRequirements
+    });
     
-    let attempt = 0;
-    while (result === null && attempt < maxRetries) {
-      attempt++;
-      console.warn(
-        `[executeAuditSession] turn ended without '${toolName}' being called ` +
-        `(attempt ${attempt}/${maxRetries}); resuming session with restricted toolset...`
-      );
-      
-      const exampleBlock = responseRequirements.toolCallExample
-        ? `\n\nUse your tool-calling capability (a real function/tool call) -- not text in your message. Example of correctly-shaped arguments:\n\n${responseRequirements.toolCallExample}`
-        : '';
-
-      const nudge = lastAssistantText.trim()
-        ? `You did not call '${toolName}'. Your last message was:
-
-"""
-${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}
-"""
-
-You must now call '${toolName}' with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call '${toolName}' now.${exampleBlock}`
-        : `You ended your turn without calling '${toolName}'. You must now call '${toolName}' with your findings. Do not respond conversationally and do not call any other tool -- call '${toolName}' now.${exampleBlock}`;
-        
-      session = await client.resumeSession(sessionId, {
-        availableTools: [toolName],
-        // Re-supply the tool declaration + handler on every resume. resumeSession
-        // constructs a brand-new CopilotSession object (not the original one) and
-        // calls session.registerTools(config.tools) on it; registerTools(undefined)
-        // clears the handler map and returns immediately, and the resume RPC sends
-        // `tools: config.tools?.map(...)`, which is undefined when config.tools is
-        // undefined. So without this, the resumed session has no tool declared for
-        // the model to call AND no handler wired to the onResult closure -- `result`
-        // is guaranteed to stay null on every retry regardless of what the model
-        // does. `availableTools` only narrows an existing `tools` list; it does not
-        // resupply it, so it can't substitute for this.
-        tools: sessionSettings.tools,
-        // Re-supply BYOK credentials on every resume. Per the SDK docs, `provider`
-        // is NOT persisted across a resume the way most other session config is --
-        // it must be re-provided each time, or the resumed session silently loses
-        // BYOK and falls back off the configured provider.
-        //
-        // This currently happens to be harmless here: `client` is never stopped and
-        // `session` is never disconnected between the original createSession and this
-        // resumeSession call, so the CLI process/connection never actually let go of
-        // the credentials -- the resume is live/in-memory, not a cold resume from disk.
-        // But that's a lifecycle detail, not a guarantee. If this loop is ever changed
-        // to retry after a disconnect, a process restart, or on a different client
-        // instance (e.g. a queue/worker picking up the retry), omitting `provider`
-        // here would start silently downgrading BYOK sessions to copilot-native on
-        // retry. Keep this passed explicitly so correctness doesn't depend on the
-        // current call not disconnecting in between.
-        ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
-      } as SessionConfig & { autoApproveAll?: boolean });
-      
-      sessionId = session.sessionId;
-      onSessionId?.(session.sessionId);
-      tracker = trackLastAssistantMessage(session);
-      await sendAndWaitWithAbort(session, { prompt: nudge }, timeoutMs, abortSignal);
-      lastAssistantText = tracker.getText() || lastAssistantText;
-      tracker.unsubscribe();
-    }
-    
-    console.log('[executeAuditSession] disconnecting session...');
-    await session.disconnect();
-    
-    if (result === null) {
-      const truncated = truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH);
-      throw new Error(
-        `Reviewer session ended without calling '${toolName}' after ${maxRetries} retr${maxRetries === 1 ? 'y' : 'ies'}. ` +
-        `Model's last message: ${truncated || '(no assistant text captured)'}`
-      );
-    }
+    result = turnResult.result;
     
     console.log('[executeAuditSession] complete!');
     return result;

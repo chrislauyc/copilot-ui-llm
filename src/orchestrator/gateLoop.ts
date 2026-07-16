@@ -959,14 +959,104 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         };
         abortController.signal.addEventListener('abort', classificationAbortHandler);
         try {
-          // Force the tool choice to guarantee a structured plan
+          // Use runForcedToolTurn to guarantee a structured plan without initial tool_choice
+          const runPromise = runForcedToolTurn(classificationSession, classificationConfig, 'initialize_blueprint', classificationPrompt, {
+            client,
+            timeoutMs: 30000,
+            getResult: () => toolArguments,
+            tools: [{
+            name: AMBIGUITY_CHECK_TOOL.function.name,
+            description: AMBIGUITY_CHECK_TOOL.function.description,
+            parameters: AMBIGUITY_CHECK_TOOL.function.parameters,
+            handler: async () => {
+              return { status: 'success' };
+            }
+          } as Tool<unknown>],
+        });
+        
+        let clarityData: ClarityCheckData | null = null;
+        const unsub = claritySession.on('tool.execution_start', (event) => {
+          writeLog(`[Ambiguity] Event: ${event.type} ${JSON.stringify(event.data || {})}`);
+          if (event.data?.toolName === 'submit_clarity_check' && event.data.arguments) {
+            const args = event.data.arguments as Record<string, unknown>;
+            clarityData = {
+              score: typeof args.score === 'number' ? args.score : 0,
+              missingVariables: Array.isArray(args.missingVariables) ? args.missingVariables.map(v => String(v)) : [],
+              feedback: typeof args.feedback === 'string' ? args.feedback : undefined,
+            };
+            writeLog(`[Ambiguity] Captured clarityData from tool.execution_start: ${JSON.stringify(clarityData)}`);
+          }
+        });
+        
+        writeLog(`[Ambiguity] Sending request to ambiguity checker...`);
+        const clarityAbortHandler = () => {
+          claritySession.disconnect().catch(() => {});
+        };
+        abortController.signal.addEventListener('abort', clarityAbortHandler);
+        try {
           await Promise.race([
-            classificationSession.sendAndWait({ 
-              prompt: classificationPrompt,
-              tool_choice: { type: 'function', function: { name: 'initialize_blueprint' } }
-            } as ExtendedMessageOptions, 30000),
+            claritySession.sendAndWait({
+              prompt: formatClarityCheckPrompt(promptStr),
+              tool_choice: { type: 'function', function: { name: 'submit_clarity_check' } }
+            } as ExtendedMessageOptions, 20000),
             abortPromise
           ]);
+        } finally {
+          abortController.signal.removeEventListener('abort', clarityAbortHandler);
+        }
+        writeLog(`[Ambiguity] sendAndWait finished. clarityData is: ${JSON.stringify(clarityData)}`, LogLevel.DEBUG);
+        unsub();
+        await claritySession.disconnect();
+        
+        const finalClarityData = clarityData as ClarityCheckData | null;
+        if (finalClarityData && finalClarityData.score < 0.85) {
+          const missingList = finalClarityData.missingVariables.map((v: string) => `• ${v}`).join('\n');
+          const clarityEvent = {
+            type: 'loop.clarity_check_failed',
+            data: {
+              score: finalClarityData.score,
+              missingVariables: finalClarityData.missingVariables,
+              feedback: `Goal ambiguity detected (Clarity: ${finalClarityData.score}). Please clarify:\n${missingList}`
+            }
+          };
+          await secureWrite(res, `data: ${JSON.stringify(clarityEvent)}\n\n`, isRequestClosed);
+          await flushSseAndEnd(res);
+          await cleanup();
+          return;
+        }
+      } catch (err) {
+        writeLog(`[Ambiguity] Check failed, bypassing: ${err}`, LogLevel.WARN);
+        const warnEvent = {
+          type: 'loop.warning',
+          data: { message: `Ambiguity check failed: ${err instanceof Error ? err.message : String(err)}. Bypassing to execution.` }
+        };
+        await secureWrite(res, `data: ${JSON.stringify(warnEvent)}\n\n`, isRequestClosed);
+      }
+    }
+
+    // T1: Composer Router Classification (Structured Tool Choice)
+    let activeStepGates = normalizeGates(gates || []);
+    let classifiedType = '';
+    if (!isDiagnostic && !isResume) {
+      writeLog(`[Composer] Classifying task intent for: "${promptStr.substring(0, 50)}..."`);
+      try {
+        const classificationConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
+        const classificationSession: CopilotSession = await client.createSession({
+          model: classificationConfig.model,
+          provider: classificationConfig.provider as SdkProviderConfig,
+          onPermissionRequest: async () => ({ kind: 'approve-once' }),
+          tools: [{
+            name: COMPOSER_ROUTER_TOOL.function.name,
+            description: COMPOSER_ROUTER_TOOL.function.description,
+            parameters: COMPOSER_ROUTER_TOOL.function.parameters,
+            handler: async () => {
+              return { status: 'success' };
+            }
+          } as Tool<unknown>]
+          });
+          await Promise.race([runPromise, abortPromise]);
+        } catch (err: any) {
+          writeLog(`[Composer] runForcedToolTurn failed: ${err.message}`, LogLevel.WARN);
         } finally {
           abortController.signal.removeEventListener('abort', classificationAbortHandler);
         }
@@ -1533,12 +1623,32 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               });
             }
 
-            writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`, LogLevel.DEBUG);
-            await Promise.race([
-              session.sendAndWait({ prompt: currentPrompt }, 600000),
-              abortPromise
-            ]);
-            writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
+            writeLog(`[SESSION] Executing turn with prompt length=${currentPrompt.length}`, LogLevel.DEBUG);
+            try {
+              if (!isDiagnostic && (classifiedType === 'feature' || classifiedType === 'refactor')) {
+                const runPromise = runForcedToolTurn(session, loopExecutionConfig, RUN_TERMINAL_DOCKER_TOOL.function.name, currentPrompt, {
+                  client,
+                  timeoutMs: 600000,
+                  maxRetries: 1,
+                  getResult: () => toolWasCalledInThisTurn ? true : null,
+                  tools: loopSessionOptions.tools
+                });
+                
+                const turnResult = await Promise.race([runPromise, abortPromise]);
+                // Ensure session ID is updated if it changed during retry
+                if ((turnResult as any).sessionId) {
+                   session = await client.getSession((turnResult as any).sessionId);
+                }
+              } else {
+                await Promise.race([
+                  session.sendAndWait({ prompt: currentPrompt }, 600000),
+                  abortPromise
+                ]);
+              }
+            } catch (err: any) {
+               writeLog(`[SESSION] Execution failed or exhausted retries: ${err.message}`, LogLevel.WARN);
+            }
+            writeLog(`[SESSION] Turn execution finished.`, LogLevel.DEBUG);
             // Wait for session.idle / turn completion
             writeLog(`[SESSION] Awaiting pDone resolution`);
             try {
