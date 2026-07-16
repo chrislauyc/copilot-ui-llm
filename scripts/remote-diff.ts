@@ -253,14 +253,21 @@ export function runRemoteDiff(config: DiffConfig): string {
     if (config.prNumber) {
       console.log(`💬 Fetching PR comments for PR #${config.prNumber}...`);
       try {
-        const jsonOutput = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber} --json`, { encoding: 'utf-8' });
+        const repoMatch = config.remoteRepoUrl.match(/github\.com\/([^\/]+\/[^\/\.]+)/);
+        let repo = 'chrislyclau/copilot-ui';
+        if (repoMatch) {
+          repo = repoMatch[1].replace('.git', '');
+        }
+        const env = { ...process.env, REPO: repo };
+
+        const jsonOutput = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber} --json`, { encoding: 'utf-8', env });
         const comments: PRComment[] = JSON.parse(jsonOutput);
         for (const c of comments) {
           const list = commentsByFile.get(c.path) ?? [];
           list.push(c);
           commentsByFile.set(c.path, list);
         }
-        prTextInfo = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber}`, { encoding: 'utf-8' });
+        prTextInfo = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber}`, { encoding: 'utf-8', env });
       } catch (err: any) {
         console.warn(`⚠️  Failed to fetch PR comments: ${err.message}`);
       }
