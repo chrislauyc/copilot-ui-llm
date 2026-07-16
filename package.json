@@ -12,6 +12,7 @@
     "review:pr": "tsx scripts/review-pr.ts",
     "import:repo": "tsx scripts/import-repo.ts",
     "diff:repo": "tsx scripts/remote-diff.ts",
+    "remote:diff": "tsx scripts/remote-diff.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
