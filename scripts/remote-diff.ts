@@ -13,6 +13,7 @@ interface DiffConfig {
    *  Shape: Array<{ path: string; line: number; author: string; body: string }>
    */
   commentsPath?: string;
+  prNumber?: string;
   /** Lines of unified diff context. Default 3 (git's default). */
   contextLines?: number;
   /** Max characters of diff to include per file before truncating. Keeps
@@ -246,18 +247,41 @@ export function runRemoteDiff(config: DiffConfig): string {
     });
 
     console.log(`📊 Comparing directories and optimizing output for LLM consumption...`);
-    const commentsByFile = loadComments(config.commentsPath);
-    if (config.commentsPath) {
-      console.log(`💬 Loaded PR comments from ${config.commentsPath} (${commentsByFile.size} file(s) annotated)`);
+    let commentsByFile = new Map<string, PRComment[]>();
+    let prTextInfo = '';
+
+    if (config.prNumber) {
+      console.log(`💬 Fetching PR comments for PR #${config.prNumber}...`);
+      try {
+        const jsonOutput = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber} --json`, { encoding: 'utf-8' });
+        const comments: PRComment[] = JSON.parse(jsonOutput);
+        for (const c of comments) {
+          const list = commentsByFile.get(c.path) ?? [];
+          list.push(c);
+          commentsByFile.set(c.path, list);
+        }
+        prTextInfo = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber}`, { encoding: 'utf-8' });
+      } catch (err: any) {
+        console.warn(`⚠️  Failed to fetch PR comments: ${err.message}`);
+      }
+    } else {
+      commentsByFile = loadComments(config.commentsPath);
+      if (config.commentsPath) {
+        console.log(`💬 Loaded PR comments from ${config.commentsPath} (${commentsByFile.size} file(s) annotated)`);
+      }
     }
 
-    const llmReadyDiff = optimizeDiffForLLM(
+    let llmReadyDiff = optimizeDiffForLLM(
       path.resolve(config.localPath),
       clonePath,
       commentsByFile,
       config.contextLines ?? 3,
       config.maxDiffCharsPerFile ?? 20000,
     );
+
+    if (prTextInfo) {
+      llmReadyDiff = `# PR Comments & Reviews\n\n${prTextInfo}\n\n---\n\n` + llmReadyDiff;
+    }
 
     const outputPath = path.join(tmpDir, 'llm_ready_diff.md');
     fs.writeFileSync(outputPath, llmReadyDiff, 'utf-8');
@@ -277,12 +301,25 @@ export function runRemoteDiff(config: DiffConfig): string {
 }
 
 // Example / Direct CLI execution:
-// Usage: tsx remote-diff.ts [comments.json]
+// Usage: tsx remote-diff.ts [comments.json | PR_NUMBER]
+const arg = process.argv[2];
+let commentsPath: string | undefined;
+let prNumber: string | undefined;
+
+if (arg) {
+  if (arg.endsWith('.json')) {
+    commentsPath = arg;
+  } else {
+    prNumber = arg;
+  }
+}
+
 const DEFAULT_CONFIG: DiffConfig = {
   remoteRepoUrl: 'https://github.com/chrislyclau/copilot-ui.git',
   localPath: '.',
   branch: 'main',
-  commentsPath: process.argv[2],
+  commentsPath,
+  prNumber,
 };
 
 const isDirectRun = () => {
