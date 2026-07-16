@@ -14,8 +14,6 @@ fi
 
 PR_NUMBER="$1"
 MODE="${2:-text}"
-GH_TOKEN=GH_TOKEN_UPSTREAM
-REPO=chrislauyc/copilot-ui-llm
 
 if [ "$MODE" = "--json" ]; then
   # Structured output: just the inline review comments, since those are the
