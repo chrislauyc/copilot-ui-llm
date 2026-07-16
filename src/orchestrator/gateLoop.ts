@@ -1555,26 +1555,10 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
 
             writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`, LogLevel.DEBUG);
-            const turnResult = await Promise.race([
-              runForcedToolTurn(session, loopExecutionConfig, RUN_TERMINAL_DOCKER_TOOL.function.name, currentPrompt, {
-                client,
-                timeoutMs: 600000,
-                maxRetries: 1,
-                getResult: () => undefined,
-                tools: loopSessionOptions.tools
-              }),
-              abortPromise
-            ]) as { result: unknown; session: CopilotSession; lastAssistantText: string; toolCalled: boolean } | undefined;
-            
-            if (turnResult) {
-              if (turnResult.session) {
-                session = turnResult.session;
-              }
-              if (turnResult.toolCalled) {
-                toolWasCalledInThisTurn = true;
-              }
-            }
-            
+            await Promise.race([
+              session.sendAndWait({ prompt: currentPrompt }, 600000),
+              abortPromise,
+            ]);
             writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
             // Wait for session.idle / turn completion
             writeLog(`[SESSION] Awaiting pDone resolution`);
@@ -1582,17 +1566,31 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               await Promise.race([pDone, abortPromise]);
               writeLog(`[SESSION] pDone resolved successfully`);
             } catch (pErr: unknown) {
-              writeLog(`[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. Aborting loop.`, LogLevel.WARN);
+              writeLog(
+                `[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. Aborting loop.`,
+                LogLevel.WARN,
+              );
               break;
             }
 
             if (sessionId && activeSessions.has(sessionId)) {
               const currentRec = activeSessions.get(sessionId)!;
-              const currentTierConfig = DEFAULT_ROLES_CONFIG.executorTiers.find(t => t.model === currentModel) || (DEFAULT_ROLES_CONFIG.planner.model === currentModel ? DEFAULT_ROLES_CONFIG.planner : null) || { provider: 'gemini', model: currentModel, tokenRatio: 4 };
+              const currentTierConfig = DEFAULT_ROLES_CONFIG.executorTiers.find(
+                (t) => t.model === currentModel,
+              ) ||
+                (DEFAULT_ROLES_CONFIG.planner.model === currentModel
+                  ? DEFAULT_ROLES_CONFIG.planner
+                  : null) || {
+                  provider: "gemini",
+                  model: currentModel,
+                  tokenRatio: 4,
+                };
               const divisor = currentTierConfig.tokenRatio || 4;
               activeSessions.set(sessionId, {
                 ...currentRec,
-                totalOutputTokens: (currentRec.totalOutputTokens || 0) + Math.ceil(assistantMessage.length / divisor)
+                totalOutputTokens:
+                  (currentRec.totalOutputTokens || 0) +
+                  Math.ceil(assistantMessage.length / divisor),
               });
             }
 
@@ -1601,11 +1599,68 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               const sRec = activeSessions.get(sessionId)!;
               activeSessions.set(sessionId, {
                 ...sRec,
-                conversationHistory: [...(sRec.conversationHistory || []), { role: 'assistant', content: assistantMessage }]
+                conversationHistory: [
+                  ...(sRec.conversationHistory || []),
+                  { role: "assistant", content: assistantMessage },
+                ],
               });
             }
 
-            // SYS-REQ-004: Enforce structured tool calls for mutation tasks
+            // SYS-REQ-004: Enforce structured tool calls for mutation tasks.
+            // Only attempt a narrowed forced-tool retry if NO tool was called at all on the
+            // first turn (toolWasCalledInThisTurn is set generically by the tool.user_requested
+            // listener above, for any tool -- not just run_terminal_docker). This avoids
+            // clobbering a turn that legitimately called a different tool (e.g. runLint).
+            if (
+              !isDiagnostic &&
+              (classifiedType === "feature" || classifiedType === "refactor") &&
+              !toolWasCalledInThisTurn
+            ) {
+              writeLog(
+                `[GateLoop] SYS-REQ-004: No tool call detected on first turn. Attempting one narrowed retry before failing MutationGate.`,
+                LogLevel.WARN,
+              );
+              try {
+                const retryResult = (await Promise.race([
+                  runForcedToolTurn(
+                    session,
+                    loopExecutionConfig,
+                    RUN_TERMINAL_DOCKER_TOOL.function.name,
+                    currentPrompt,
+                    {
+                      client,
+                      timeoutMs: 600000,
+                      maxRetries: 1,
+                      getResult: () => undefined,
+                      tools: loopSessionOptions.tools,
+                    },
+                  ),
+                  abortPromise,
+                ])) as
+                  | {
+                      result: unknown;
+                      session: CopilotSession;
+                      lastAssistantText: string;
+                      toolCalled: boolean;
+                    }
+                  | undefined;
+
+                if (retryResult) {
+                  if (retryResult.session) {
+                    session = retryResult.session;
+                  }
+                  if (retryResult.toolCalled) {
+                    toolWasCalledInThisTurn = true;
+                  }
+                }
+              } catch (retryErr: unknown) {
+                writeLog(
+                  `[GateLoop] Narrowed forced-tool retry threw: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+                  LogLevel.WARN,
+                );
+              }
+            }
+
             if (!isDiagnostic && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
                writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`, LogLevel.WARN);
                allGatesPassedInThisCycle = false;
@@ -2149,12 +2204,19 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
   }
 };
 
-export const handleGateStream = async (req: express.Request, res: express.Response) => {
-  const sessionId = (req.query.sessionId as string) || (req.headers['x-copilot-session-id'] as string);
-  
+export const handleGateStream = async (
+  req: express.Request,
+  res: express.Response,
+) => {
+  const sessionId =
+    (req.query.sessionId as string) ||
+    (req.headers["x-copilot-session-id"] as string);
+
   if (!sessionId) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: false, error: 'Session ID is required.' }));
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({ success: false, error: "Session ID is required." }),
+    );
     return;
   }
 
@@ -2162,12 +2224,12 @@ export const handleGateStream = async (req: express.Request, res: express.Respon
 
   // Set headers for SSE
   res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no'
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
   });
-  res.write(':\n\n');
+  res.write(":\n\n");
 
   // Register SSE mapping
   sseResToSessionId.set(res, sessionId);
@@ -2177,12 +2239,14 @@ export const handleGateStream = async (req: express.Request, res: express.Respon
 
   // Stream all buffered events that the client hasn't seen
   const buffered = SessionSseHub.getBuffer(sessionId);
-  writeLog(`[GateStream] Streaming ${buffered.length} buffered events to client for session ${sessionId}.`);
+  writeLog(
+    `[GateStream] Streaming ${buffered.length} buffered events to client for session ${sessionId}.`,
+  );
   for (const ev of buffered) {
     await secureWrite(res, `data: ${JSON.stringify(ev)}\n\n`);
   }
 
-  res.on('close', () => {
+  res.on("close", () => {
     writeLog(`[GateStream] Client connection closed for session ${sessionId}`);
     SessionSseHub.unsubscribe(sessionId, res);
     sseResToSessionId.delete(res);
