@@ -81,7 +81,7 @@ function annotateDiffWithComments(diff: string, comments: PRComment[]): string {
     // headers like "@@ -10,7 +12,8 @@"
     const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
-      currentNewLine = parseInt(hunkMatch[1], 10) - 1;
+      currentNewLine = parseInt(hunkMatch[1] || "", 10) - 1;
       continue;
     }
 
@@ -256,7 +256,7 @@ export function runRemoteDiff(config: DiffConfig): string {
         const repoMatch = config.remoteRepoUrl.match(/github\.com\/([^\/]+\/[^\/\.]+)/);
         let repo = 'chrislyclau/copilot-ui';
         if (repoMatch) {
-          repo = repoMatch[1].replace('.git', '');
+          repo = (repoMatch[1] || '').replace('.git', '');
         }
         const env = { ...process.env, REPO: repo };
 
