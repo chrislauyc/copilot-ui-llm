@@ -315,7 +315,7 @@ if (arg) {
 }
 
 const DEFAULT_CONFIG: DiffConfig = {
-  remoteRepoUrl: 'https://github.com/chrislyclau/copilot-ui.git',
+  remoteRepoUrl: 'https://github.com/chrislauyc/copilot-ui-llm.git',
   localPath: '.',
   branch: 'main',
   commentsPath,
