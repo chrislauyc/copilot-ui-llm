@@ -847,7 +847,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       writeLog(`[Ambiguity] Running pre-flight clarity check...`);
       try {
         const clarityConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
-        const claritySession: CopilotSession = await client.createSession({
+        let claritySession: CopilotSession = await client.createSession({
           model: clarityConfig.model,
           provider: clarityConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
@@ -934,7 +934,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       writeLog(`[Composer] Classifying task intent for: "${promptStr.substring(0, 50)}..."`);
       try {
         const classificationConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
-        const classificationSession: CopilotSession = await client.createSession({
+        let classificationSession: CopilotSession = await client.createSession({
           model: classificationConfig.model,
           provider: classificationConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
@@ -1546,7 +1546,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
 
             writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`, LogLevel.DEBUG);
-            await Promise.race([
+            const turnResult: any = await Promise.race([
               runForcedToolTurn(session, loopExecutionConfig, RUN_TERMINAL_DOCKER_TOOL.function.name, currentPrompt, {
                 client,
                 timeoutMs: 600000,
@@ -1556,6 +1556,10 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               }),
               abortPromise
             ]);
+            
+            if (turnResult && turnResult.session) {
+              session = turnResult.session;
+            }
             
             writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
             // Wait for session.idle / turn completion
