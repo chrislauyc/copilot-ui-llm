@@ -1556,6 +1556,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               }),
               abortPromise
             ]);
+            
             writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
             // Wait for session.idle / turn completion
             writeLog(`[SESSION] Awaiting pDone resolution`);

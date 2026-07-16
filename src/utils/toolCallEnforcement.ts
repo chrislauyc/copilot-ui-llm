@@ -58,7 +58,7 @@ export interface ForcedToolTurnOptions<T> {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   maxRetries?: number;
-  getResult: () => T | null;
+  getResult: () => T | undefined;
   tools?: any[]; // CopilotSDK Tool array
   responseRequirements?: { toolCallExample?: string };
 }
@@ -97,14 +97,9 @@ export async function runForcedToolTurn<T>(
   tracker.unsubscribe();
   unsubTool();
   
-  let result = opts.getResult();
-  if (toolCalled && result === null) {
-    result = true as unknown as T; // Fallback if getResult doesn't work across sessions
-  }
-  
   let attempt = 0;
   
-  while (result === null && attempt < maxRetries) {
+  while (!toolCalled && attempt < maxRetries) {
     attempt++;
     console.warn(
       `[runForcedToolTurn] turn ended without '${toolName}' being called ` +
@@ -141,13 +136,10 @@ export async function runForcedToolTurn<T>(
     lastAssistantText = tracker.getText() || lastAssistantText;
     tracker.unsubscribe();
     unsubTool();
-    result = opts.getResult();
-    if (toolCalled && result === null) {
-      result = true as unknown as T;
-    }
+
   }
   
-  if (result === null) {
+  if (!toolCalled) {
     const truncated = truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH);
     throw new Error(
       `Session ended without calling '${toolName}' after ${maxRetries} retr${maxRetries === 1 ? 'y' : 'ies'}. ` +
@@ -155,5 +147,5 @@ export async function runForcedToolTurn<T>(
     );
   }
   
-  return { result, sessionId: currentSessionId, lastAssistantText };
+  return { result: opts.getResult() as T, sessionId: currentSessionId, lastAssistantText };
 }
