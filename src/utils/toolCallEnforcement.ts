@@ -82,7 +82,13 @@ export async function runForcedToolTurn<T>(
   const setupToolListener = (s: CopilotSession) => {
     const unsub = s.on((event: unknown) => {
       const ev = event as Record<string, unknown>;
-      if (ev.type === 'tool.user_requested' && (ev.data as any)?.toolName === toolName) {
+      if (
+        (ev.type === 'tool.user_requested' && (ev.data as any)?.toolName === toolName) ||
+        (ev.type === 'tool.execution_start' && (ev.data as any)?.toolName === toolName) ||
+        (ev.type === 'external_tool.requested' && (ev.data as any)?.toolName === toolName) ||
+        (ev.type === 'tool.execution_complete' && (ev.data as any)?.toolCallId === `call-${toolName}`) ||
+        (ev.type === 'tool.execution_complete' && (ev.data as any)?.toolName === toolName)
+      ) {
         toolCalled = true;
       }
     });
