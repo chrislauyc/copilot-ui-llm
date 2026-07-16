@@ -1,4 +1,4 @@
-import { CopilotClient, CopilotSession, SdkProviderConfig, SessionConfig, ExtendedMessageOptions } from '@github/copilot-sdk';
+import { CopilotClient, CopilotSession, ProviderConfig, SessionConfig, MessageOptions } from '@github/copilot-sdk';
 
 /**
  * How much of the model's last assistant message to include when we give up
@@ -35,7 +35,7 @@ export function trackLastAssistantMessage(session: CopilotSession): { readonly g
 
 export async function sendAndWaitWithAbort(
   session: CopilotSession,
-  prompt: ExtendedMessageOptions,
+  prompt: MessageOptions,
   timeoutMs: number,
   abortSignal?: AbortSignal,
 ): Promise<void> {
@@ -65,7 +65,7 @@ export interface ForcedToolTurnOptions<T> {
 
 export async function runForcedToolTurn<T>(
   session: CopilotSession,
-  executionConfig: { provider?: string },
+  executionConfig: { provider?: unknown },
   toolName: string,
   initialPrompt: string,
   opts: ForcedToolTurnOptions<T>
@@ -121,7 +121,7 @@ export async function runForcedToolTurn<T>(
     const resumeConfig = {
       availableTools: [toolName],
       tools: opts.tools,
-      ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
+      ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
     };
     
     currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig);
