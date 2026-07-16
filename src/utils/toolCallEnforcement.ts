@@ -69,7 +69,7 @@ export async function runForcedToolTurn<T>(
   toolName: string,
   initialPrompt: string,
   opts: ForcedToolTurnOptions<T>
-): Promise<{ result: T; sessionId: string; lastAssistantText: string }> {
+): Promise<{ result: T; session: CopilotSession; lastAssistantText: string }> {
   let currentSession = session;
   let currentSessionId = session.sessionId;
   const timeoutMs = opts.timeoutMs ?? 300000;
@@ -147,5 +147,5 @@ export async function runForcedToolTurn<T>(
     );
   }
   
-  return { result: opts.getResult() as T, sessionId: currentSessionId, lastAssistantText };
+  return { result: opts.getResult() as T, session: currentSession, lastAssistantText };
 }
