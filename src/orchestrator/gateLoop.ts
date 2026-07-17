@@ -14,7 +14,8 @@ import {
   Tool,
   SessionEvent,
   MessageOptions,
-  ToolExecutionCompleteContent
+  ToolExecutionCompleteContent,
+  defineTool
 } from '../copilotSdk/boundary';
 
 // From other files
@@ -36,6 +37,7 @@ import {
   COMPOSER_ROUTER_TOOL,
   AMBIGUITY_CHECK_TOOL
 } from '../config/tools';
+import { runForcedToolTurn } from "../utils/toolCallEnforcement";
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from '../config/gates';
 import { runSpecAudit } from '../gates/specAuditor';
 import { validateCwd } from '../security/pathGuard';
@@ -845,19 +847,21 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (!isDiagnostic && !isResume) {
       writeLog(`[Ambiguity] Running pre-flight clarity check...`);
       try {
-        const clarityConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
-        const claritySession: CopilotSession = await client.createSession({
+        const clarityConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
+        let claritySession: CopilotSession = await client.createSession({
           model: clarityConfig.model,
           provider: clarityConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
-          tools: [{
-            name: AMBIGUITY_CHECK_TOOL.function.name,
-            description: AMBIGUITY_CHECK_TOOL.function.description,
-            parameters: AMBIGUITY_CHECK_TOOL.function.parameters,
-            handler: async () => {
-              return { status: 'success' };
-            }
-          } as Tool<unknown>],
+          tools: [
+            defineTool(
+              AMBIGUITY_CHECK_TOOL.function.name,
+              AMBIGUITY_CHECK_TOOL.function.description,
+              AMBIGUITY_CHECK_TOOL.function.parameters,
+              async () => {
+                return { status: 'success' };
+              }
+            )
+          ],
         });
         
         let clarityData: ClarityCheckData | null = null;
@@ -880,13 +884,21 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         };
         abortController.signal.addEventListener('abort', clarityAbortHandler);
         try {
-          await Promise.race([
-            claritySession.sendAndWait({
-              prompt: formatClarityCheckPrompt(promptStr),
-              tool_choice: { type: 'function', function: { name: 'submit_clarity_check' } }
-            } as ExtendedMessageOptions, 20000),
-            abortPromise
-          ]);
+          const clarityConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
+          const runPromise = runForcedToolTurn(claritySession, clarityConfig, 'submit_clarity_check', formatClarityCheckPrompt(promptStr), {
+            client,
+            timeoutMs: 20000,
+            getResult: () => clarityData,
+            tools: [
+              defineTool(
+                AMBIGUITY_CHECK_TOOL.function.name,
+                AMBIGUITY_CHECK_TOOL.function.description,
+                AMBIGUITY_CHECK_TOOL.function.parameters,
+                async () => { return { status: 'success' }; }
+              )
+            ]
+          });
+          await Promise.race([runPromise, abortPromise]);
         } finally {
           abortController.signal.removeEventListener('abort', clarityAbortHandler);
         }
@@ -926,19 +938,21 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (!isDiagnostic && !isResume) {
       writeLog(`[Composer] Classifying task intent for: "${promptStr.substring(0, 50)}..."`);
       try {
-        const classificationConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
-        const classificationSession: CopilotSession = await client.createSession({
+        const classificationConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
+        let classificationSession: CopilotSession = await client.createSession({
           model: classificationConfig.model,
           provider: classificationConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
-          tools: [{
-            name: COMPOSER_ROUTER_TOOL.function.name,
-            description: COMPOSER_ROUTER_TOOL.function.description,
-            parameters: COMPOSER_ROUTER_TOOL.function.parameters,
-            handler: async () => {
-              return { status: 'success' };
-            }
-          } as Tool<unknown>],
+          tools: [
+            defineTool(
+              COMPOSER_ROUTER_TOOL.function.name,
+              COMPOSER_ROUTER_TOOL.function.description,
+              COMPOSER_ROUTER_TOOL.function.parameters,
+              async () => {
+                return { status: 'success' };
+              }
+            )
+          ],
         });
                let toolArguments: ComposerRouteArguments | null = null;
         const unsub = classificationSession.on('tool.execution_start', (event) => {
@@ -960,13 +974,20 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         abortController.signal.addEventListener('abort', classificationAbortHandler);
         try {
           // Force the tool choice to guarantee a structured plan
-          await Promise.race([
-            classificationSession.sendAndWait({ 
-              prompt: classificationPrompt,
-              tool_choice: { type: 'function', function: { name: 'initialize_blueprint' } }
-            } as ExtendedMessageOptions, 30000),
-            abortPromise
-          ]);
+          const runPromise = runForcedToolTurn(classificationSession, classificationConfig, 'initialize_blueprint', classificationPrompt, {
+            client,
+            timeoutMs: 30000,
+            getResult: () => toolArguments,
+            tools: [
+              defineTool(
+                COMPOSER_ROUTER_TOOL.function.name,
+                COMPOSER_ROUTER_TOOL.function.description,
+                COMPOSER_ROUTER_TOOL.function.parameters,
+                async () => { return { status: 'success' }; }
+              )
+            ]
+          });
+          await Promise.race([runPromise, abortPromise]);
         } finally {
           abortController.signal.removeEventListener('abort', classificationAbortHandler);
         }
@@ -1536,7 +1557,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`, LogLevel.DEBUG);
             await Promise.race([
               session.sendAndWait({ prompt: currentPrompt }, 600000),
-              abortPromise
+              abortPromise,
             ]);
             writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
             // Wait for session.idle / turn completion
@@ -1545,17 +1566,31 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               await Promise.race([pDone, abortPromise]);
               writeLog(`[SESSION] pDone resolved successfully`);
             } catch (pErr: unknown) {
-              writeLog(`[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. Aborting loop.`, LogLevel.WARN);
+              writeLog(
+                `[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. Aborting loop.`,
+                LogLevel.WARN,
+              );
               break;
             }
 
             if (sessionId && activeSessions.has(sessionId)) {
               const currentRec = activeSessions.get(sessionId)!;
-              const currentTierConfig = DEFAULT_ROLES_CONFIG.executorTiers.find(t => t.model === currentModel) || (DEFAULT_ROLES_CONFIG.planner.model === currentModel ? DEFAULT_ROLES_CONFIG.planner : null) || { provider: 'gemini', model: currentModel, tokenRatio: 4 };
+              const currentTierConfig = DEFAULT_ROLES_CONFIG.executorTiers.find(
+                (t) => t.model === currentModel,
+              ) ||
+                (DEFAULT_ROLES_CONFIG.planner.model === currentModel
+                  ? DEFAULT_ROLES_CONFIG.planner
+                  : null) || {
+                  provider: "gemini",
+                  model: currentModel,
+                  tokenRatio: 4,
+                };
               const divisor = currentTierConfig.tokenRatio || 4;
               activeSessions.set(sessionId, {
                 ...currentRec,
-                totalOutputTokens: (currentRec.totalOutputTokens || 0) + Math.ceil(assistantMessage.length / divisor)
+                totalOutputTokens:
+                  (currentRec.totalOutputTokens || 0) +
+                  Math.ceil(assistantMessage.length / divisor),
               });
             }
 
@@ -1564,11 +1599,69 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               const sRec = activeSessions.get(sessionId)!;
               activeSessions.set(sessionId, {
                 ...sRec,
-                conversationHistory: [...(sRec.conversationHistory || []), { role: 'assistant', content: assistantMessage }]
+                conversationHistory: [
+                  ...(sRec.conversationHistory || []),
+                  { role: "assistant", content: assistantMessage },
+                ],
               });
             }
 
-            // SYS-REQ-004: Enforce structured tool calls for mutation tasks
+            // SYS-REQ-004: Enforce structured tool calls for mutation tasks.
+            // Only attempt a narrowed forced-tool retry if NO tool was called at all on the
+            // first turn (toolWasCalledInThisTurn is set generically by the tool.user_requested
+            // listener above, for any tool -- not just run_terminal_docker). This avoids
+            // clobbering a turn that legitimately called a different tool (e.g. runLint).
+            if (
+              !isDiagnostic &&
+              (classifiedType === "feature" || classifiedType === "refactor") &&
+              !toolWasCalledInThisTurn
+            ) {
+              writeLog(
+                `[GateLoop] SYS-REQ-004: No tool call detected on first turn. Attempting one narrowed retry before failing MutationGate.`,
+                LogLevel.WARN,
+              );
+              try {
+                const retryResult = (await Promise.race([
+                  runForcedToolTurn(
+                    session,
+                    loopExecutionConfig,
+                    (loopSessionOptions.tools?.map(t => t.name || (t as { function?: { name?: string } }).function?.name).filter(Boolean) as string[]) || [],
+                    currentPrompt,
+                    {
+                      client,
+                      timeoutMs: 600000,
+                      maxRetries: 1,
+                      getResult: () => undefined,
+                      tools: loopSessionOptions.tools,
+                    },
+                  ),
+                  abortPromise,
+                ])) as
+                  | {
+                      result: unknown;
+                      session: CopilotSession;
+                      lastAssistantText: string;
+                      toolCalled: boolean;
+                    }
+                  | undefined;
+
+                if (retryResult) {
+                  if (retryResult.session) {
+                    session = retryResult.session;
+                  }
+                  if (retryResult.toolCalled) {
+                    toolWasCalledInThisTurn = true;
+                  }
+                  assistantMessage = retryResult.lastAssistantText; // update assistant message so it doesn't just fail downstream logic
+                }
+              } catch (retryErr: unknown) {
+                writeLog(
+                  `[GateLoop] Narrowed forced-tool retry threw: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+                  LogLevel.WARN,
+                );
+              }
+            }
+
             if (!isDiagnostic && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
                writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`, LogLevel.WARN);
                allGatesPassedInThisCycle = false;
@@ -2112,12 +2205,19 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
   }
 };
 
-export const handleGateStream = async (req: express.Request, res: express.Response) => {
-  const sessionId = (req.query.sessionId as string) || (req.headers['x-copilot-session-id'] as string);
-  
+export const handleGateStream = async (
+  req: express.Request,
+  res: express.Response,
+) => {
+  const sessionId =
+    (req.query.sessionId as string) ||
+    (req.headers["x-copilot-session-id"] as string);
+
   if (!sessionId) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: false, error: 'Session ID is required.' }));
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({ success: false, error: "Session ID is required." }),
+    );
     return;
   }
 
@@ -2125,12 +2225,12 @@ export const handleGateStream = async (req: express.Request, res: express.Respon
 
   // Set headers for SSE
   res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no'
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
   });
-  res.write(':\n\n');
+  res.write(":\n\n");
 
   // Register SSE mapping
   sseResToSessionId.set(res, sessionId);
@@ -2140,12 +2240,14 @@ export const handleGateStream = async (req: express.Request, res: express.Respon
 
   // Stream all buffered events that the client hasn't seen
   const buffered = SessionSseHub.getBuffer(sessionId);
-  writeLog(`[GateStream] Streaming ${buffered.length} buffered events to client for session ${sessionId}.`);
+  writeLog(
+    `[GateStream] Streaming ${buffered.length} buffered events to client for session ${sessionId}.`,
+  );
   for (const ev of buffered) {
     await secureWrite(res, `data: ${JSON.stringify(ev)}\n\n`);
   }
 
-  res.on('close', () => {
+  res.on("close", () => {
     writeLog(`[GateStream] Client connection closed for session ${sessionId}`);
     SessionSseHub.unsubscribe(sessionId, res);
     sseResToSessionId.delete(res);
