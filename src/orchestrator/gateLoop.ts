@@ -1652,6 +1652,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
                   if (retryResult.toolCalled) {
                     toolWasCalledInThisTurn = true;
                   }
+                  assistantMessage = retryResult.lastAssistantText; // update assistant message so it doesn't just fail downstream logic
                 }
               } catch (retryErr: unknown) {
                 writeLog(
