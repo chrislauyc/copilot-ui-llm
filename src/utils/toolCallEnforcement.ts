@@ -153,5 +153,10 @@ export async function runForcedToolTurn<T>(
     );
   }
   
-  return { result: opts.getResult() as T, session: currentSession, lastAssistantText, toolCalled };
+  let finalResult = opts.getResult();
+  if (toolCalled && (finalResult === null || finalResult === undefined)) {
+    finalResult = (true as unknown) as T;
+  }
+  
+  return { result: finalResult as T, session: currentSession, lastAssistantText, toolCalled };
 }
