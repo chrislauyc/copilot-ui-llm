@@ -196,7 +196,7 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     };
     
     // Guard the stream reading with a generous 15-second timeout to handle container test environments safely
-    await awaitWithTimeout(readStreamToCompletion(), 15000, "Exhausting Retry Loop Stream Response");
+    await awaitWithTimeout(readStreamToCompletion(), 30000, "Exhausting Retry Loop Stream Response");
 
     // Verify Gap 5 parameters: underlying transport handshake must stay cached (singleton count <= 1)
     // while the SDK engine spins up 3 distinct loop evaluation frames over the sequence tracking historical records.

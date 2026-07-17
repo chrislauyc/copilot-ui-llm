@@ -1186,9 +1186,12 @@ export const handleGateLoop = async (
             `[Ambiguity] sendAndWait finished. clarityData is: ${JSON.stringify(clarityData)}`,
             LogLevel.DEBUG,
           );
-          await (
-            clarityRunResult?.session ?? currentClaritySession
-          ).disconnect();
+          // Fire-and-forget: nothing downstream needs to wait on cleanup completing,
+          // and awaiting it here adds real (occasionally spiky) latency to the
+          // request path for no benefit.
+          (clarityRunResult?.session ?? currentClaritySession)
+            .disconnect()
+            .catch(() => {});
 
           const finalClarityData = clarityData as ClarityCheckData | null;
           if (finalClarityData && finalClarityData.score < 0.85) {
@@ -1381,7 +1384,8 @@ export const handleGateLoop = async (
               isRequestClosed,
             );
           }
-          await currentClassificationSession.disconnect();
+          // Fire-and-forget: same reasoning as the clarity-check disconnect above.
+          currentClassificationSession.disconnect().catch(() => {});
         } catch (err) {
           writeLog(
             `[Composer] Classification failed, falling back: ${err}`,
