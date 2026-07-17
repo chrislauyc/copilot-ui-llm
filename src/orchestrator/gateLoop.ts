@@ -1625,7 +1625,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
                   runForcedToolTurn(
                     session,
                     loopExecutionConfig,
-                    loopSessionOptions.tools?.map(t => t.name || (t as any).function?.name) || [],
+                    (loopSessionOptions.tools?.map(t => t.name || (t as { function?: { name?: string } }).function?.name).filter(Boolean) as string[]) || [],
                     currentPrompt,
                     {
                       client,
