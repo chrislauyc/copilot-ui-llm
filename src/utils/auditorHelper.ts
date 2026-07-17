@@ -235,6 +235,13 @@ export async function executeAuditSession<T>(
     
     result = turnResult.result;
     
+    console.log('[executeAuditSession] disconnecting session...');
+    try {
+      await turnResult.session.disconnect();
+    } catch (e) {
+      // Best-effort: don't let disconnect failures mask an already-captured result
+    }
+    
     console.log('[executeAuditSession] complete!');
     return result;
   } finally {
