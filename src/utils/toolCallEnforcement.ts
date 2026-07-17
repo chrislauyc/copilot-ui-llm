@@ -66,7 +66,7 @@ export interface ForcedToolTurnOptions<T> {
 export async function runForcedToolTurn<T>(
   session: CopilotSession,
   executionConfig: { provider?: unknown },
-  toolName: string,
+  toolName: string | string[],
   initialPrompt: string,
   opts: ForcedToolTurnOptions<T>
 ): Promise<{ result: T; session: CopilotSession; lastAssistantText: string; toolCalled: boolean }> {
@@ -77,17 +77,18 @@ export async function runForcedToolTurn<T>(
   const responseRequirements = opts.responseRequirements ?? {};
   
   let toolCalled = false;
+  const targetTools = Array.isArray(toolName) ? toolName : [toolName];
   let tracker = trackLastAssistantMessage(currentSession);
   
   const setupToolListener = (s: CopilotSession) => {
     const unsub = s.on((event: unknown) => {
       const ev = event as Record<string, unknown>;
       if (
-        (ev.type === 'tool.user_requested' && (ev.data as any)?.toolName === toolName) ||
-        (ev.type === 'tool.execution_start' && (ev.data as any)?.toolName === toolName) ||
-        (ev.type === 'external_tool.requested' && (ev.data as any)?.toolName === toolName) ||
-        (ev.type === 'tool.execution_complete' && (ev.data as any)?.toolCallId === `call-${toolName}`) ||
-        (ev.type === 'tool.execution_complete' && (ev.data as any)?.toolName === toolName)
+        (ev.type === 'tool.user_requested' && targetTools.includes((ev.data as any)?.toolName)) ||
+        (ev.type === 'tool.execution_start' && targetTools.includes((ev.data as any)?.toolName)) ||
+        (ev.type === 'external_tool.requested' && targetTools.includes((ev.data as any)?.toolName)) ||
+        (ev.type === 'tool.execution_complete' && (ev.data as any)?.toolCallId && targetTools.some(t => (ev.data as any).toolCallId === `call-${t}`)) ||
+        (ev.type === 'tool.execution_complete' && targetTools.includes((ev.data as any)?.toolName))
       ) {
         toolCalled = true;
       }
@@ -107,8 +108,9 @@ export async function runForcedToolTurn<T>(
   
   while (!toolCalled && attempt < maxRetries) {
     attempt++;
+    const toolNamesStr = targetTools.map(t => `'${t}'`).join(' or ');
     console.warn(
-      `[runForcedToolTurn] turn ended without '${toolName}' being called ` +
+      `[runForcedToolTurn] turn ended without ${toolNamesStr} being called ` +
       `(attempt ${attempt}/${maxRetries}); resuming session with restricted toolset...`
     );
     
@@ -116,11 +118,11 @@ export async function runForcedToolTurn<T>(
       ? `\n\nUse your tool-calling capability (a real function/tool call) -- not text in your message. Example of correctly-shaped arguments:\n\n${responseRequirements.toolCallExample}`
       : '';
     const nudge = lastAssistantText.trim()
-      ? `You did not call '${toolName}'. Your last message was:\n"""\n${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}\n"""\nYou must now call '${toolName}' with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call '${toolName}' now.${exampleBlock}`
-      : `You ended your turn without calling '${toolName}'. You must now call '${toolName}' with your findings. Do not respond conversationally and do not call any other tool -- call '${toolName}' now.${exampleBlock}`;
+      ? `You did not call any of: ${toolNamesStr}. Your last message was:\n"""\n${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}\n"""\nYou must now call one of ${toolNamesStr} with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`
+      : `You ended your turn without calling any of: ${toolNamesStr}. You must now call one of ${toolNamesStr} with your findings. Do not respond conversationally and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`;
       
     const resumeConfig = {
-      availableTools: [toolName],
+      availableTools: targetTools,
       tools: opts.tools,
       ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
     };
@@ -134,7 +136,7 @@ export async function runForcedToolTurn<T>(
     
     const promptOpts = { prompt: nudge, tool_choice: undefined as any };
     if (executionConfig.provider === 'openrouter') {
-      promptOpts.tool_choice = { type: 'function', function: { name: toolName } };
+      promptOpts.tool_choice = { type: 'function', function: { name: targetTools[0] } };
     }
     
     await sendAndWaitWithAbort(currentSession, promptOpts, timeoutMs, opts.abortSignal);
@@ -146,9 +148,10 @@ export async function runForcedToolTurn<T>(
   }
   
   if (!toolCalled) {
+    const toolNamesStr = targetTools.map(t => `'${t}'`).join(' or ');
     const truncated = truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH);
     throw new Error(
-      `Session ended without calling '${toolName}' after ${maxRetries} retr${maxRetries === 1 ? 'y' : 'ies'}. ` +
+      `Session ended without calling ${toolNamesStr} after ${maxRetries} retr${maxRetries === 1 ? 'y' : 'ies'}. ` +
       `Model's last message: ${truncated || '(no assistant text captured)'}`
     );
   }

@@ -44,9 +44,12 @@ describe('Scenario 3: Mutation gate failure (SYS-REQ-004)', () => {
         content: \${user}
       - role: assistant
         content: ""
-        toolCalls:
-          - name: run_terminal_command
-            arguments: { "command": "echo hello" }`);
+        tool_calls:
+          - id: toolcall_1
+            type: function
+            function:
+              name: run_terminal_docker
+              arguments: '{"command": "echo hello"}'`);
       await proxy.updateConfig({ filePath: snapshotPath, workDir: tempCwd });
       fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
       const res = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/gate-run`, {
