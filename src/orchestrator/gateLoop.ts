@@ -848,7 +848,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       writeLog(`[Ambiguity] Running pre-flight clarity check...`);
       try {
         const clarityConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
-        let claritySession: CopilotSession = await client.createSession({
+        const claritySession: CopilotSession = await client.createSession({
           model: clarityConfig.model,
           provider: clarityConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
@@ -865,26 +865,34 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         });
         
         let clarityData: ClarityCheckData | null = null;
-        const unsub = claritySession.on('tool.execution_start', (event) => {
-          writeLog(`[Ambiguity] Event: ${event.type} ${JSON.stringify(event.data || {})}`);
-          if (event.data?.toolName === 'submit_clarity_check' && event.data.arguments) {
-            const args = event.data.arguments as Record<string, unknown>;
-            clarityData = {
-              score: typeof args.score === 'number' ? args.score : 0,
-              missingVariables: Array.isArray(args.missingVariables) ? args.missingVariables.map(v => String(v)) : [],
-              feedback: typeof args.feedback === 'string' ? args.feedback : undefined,
-            };
-            writeLog(`[Ambiguity] Captured clarityData from tool.execution_start: ${JSON.stringify(clarityData)}`);
-          }
-        });
+        // NOTE: attached via onSession below (not just on `claritySession`), because
+        // runForcedToolTurn's nudge retry calls client.resumeSession() internally,
+        // which returns a brand-new CopilotSession object. A listener bound only to
+        // the original `claritySession` would silently miss the tool call if the
+        // model only complies on the retry.
+        const attachClarityListener = (s: CopilotSession) => {
+          return s.on('tool.execution_start', (event) => {
+            writeLog(`[Ambiguity] Event: ${event.type} ${JSON.stringify(event.data || {})}`);
+            if (event.data?.toolName === 'submit_clarity_check' && event.data.arguments) {
+              const args = event.data.arguments as Record<string, unknown>;
+              clarityData = {
+                score: typeof args.score === 'number' ? args.score : 0,
+                missingVariables: Array.isArray(args.missingVariables) ? args.missingVariables.map(v => String(v)) : [],
+                feedback: typeof args.feedback === 'string' ? args.feedback : undefined,
+              };
+              writeLog(`[Ambiguity] Captured clarityData from tool.execution_start: ${JSON.stringify(clarityData)}`);
+            }
+          });
+        };
         
         writeLog(`[Ambiguity] Sending request to ambiguity checker...`);
+        let currentClaritySession = claritySession;
         const clarityAbortHandler = () => {
-          claritySession.disconnect().catch(() => {});
+          currentClaritySession.disconnect().catch(() => {});
         };
         abortController.signal.addEventListener('abort', clarityAbortHandler);
+        let clarityRunResult: Awaited<ReturnType<typeof runForcedToolTurn>> | undefined;
         try {
-          const clarityConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
           const runPromise = runForcedToolTurn(claritySession, clarityConfig, 'submit_clarity_check', formatClarityCheckPrompt(promptStr), {
             client,
             timeoutMs: 20000,
@@ -896,15 +904,19 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
                 AMBIGUITY_CHECK_TOOL.function.parameters,
                 async () => { return { status: 'success' }; }
               )
-            ]
+            ],
+            onSession: (s) => {
+              currentClaritySession = s;
+              const unsub = attachClarityListener(s);
+              return unsub;
+            }
           });
-          await Promise.race([runPromise, abortPromise]);
+          clarityRunResult = await Promise.race([runPromise, abortPromise]) as Awaited<ReturnType<typeof runForcedToolTurn>> | undefined;
         } finally {
           abortController.signal.removeEventListener('abort', clarityAbortHandler);
         }
         writeLog(`[Ambiguity] sendAndWait finished. clarityData is: ${JSON.stringify(clarityData)}`, LogLevel.DEBUG);
-        unsub();
-        await claritySession.disconnect();
+        await (clarityRunResult?.session ?? currentClaritySession).disconnect();
         
         const finalClarityData = clarityData as ClarityCheckData | null;
         if (finalClarityData && finalClarityData.score < 0.85) {
@@ -939,7 +951,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       writeLog(`[Composer] Classifying task intent for: "${promptStr.substring(0, 50)}..."`);
       try {
         const classificationConfig = registryInstance.getExecutionConfig(DEFAULT_ROLES_CONFIG.planner.model);
-        let classificationSession: CopilotSession = await client.createSession({
+        const classificationSession: CopilotSession = await client.createSession({
           model: classificationConfig.model,
           provider: classificationConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
@@ -954,22 +966,30 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             )
           ],
         });
-               let toolArguments: ComposerRouteArguments | null = null;
-        const unsub = classificationSession.on('tool.execution_start', (event) => {
-          if (event.data?.toolName === 'initialize_blueprint' && event.data.arguments) {
-            const args = event.data.arguments as Record<string, unknown>;
-            toolArguments = {
-              taskType: typeof args.taskType === 'string' ? args.taskType : undefined,
-              targetDirectories: Array.isArray(args.targetDirectories) ? args.targetDirectories.map(d => String(d)) : undefined,
-            };
-            writeLog(`[Composer] Captured toolArguments from tool.execution_start: ${JSON.stringify(toolArguments)}`);
-          }
-        });
+        let toolArguments: ComposerRouteArguments | null = null;
+        // NOTE: attached via onSession below (not just on `classificationSession`),
+        // because runForcedToolTurn's nudge retry calls client.resumeSession()
+        // internally, which returns a brand-new CopilotSession object. A listener
+        // bound only to the original `classificationSession` would silently miss
+        // the tool call if the model only complies on the retry.
+        const attachClassificationListener = (s: CopilotSession) => {
+          return s.on('tool.execution_start', (event) => {
+            if (event.data?.toolName === 'initialize_blueprint' && event.data.arguments) {
+              const args = event.data.arguments as Record<string, unknown>;
+              toolArguments = {
+                taskType: typeof args.taskType === 'string' ? args.taskType : undefined,
+                targetDirectories: Array.isArray(args.targetDirectories) ? args.targetDirectories.map(d => String(d)) : undefined,
+              };
+              writeLog(`[Composer] Captured toolArguments from tool.execution_start: ${JSON.stringify(toolArguments)}`);
+            }
+          });
+        };
 
         const classificationPrompt = `Analyze the following user prompt for a code generation task and initialize the workspace blueprint: "${promptStr}"`;
 
+        let currentClassificationSession = classificationSession;
         const classificationAbortHandler = () => {
-          classificationSession.disconnect().catch(() => {});
+          currentClassificationSession.disconnect().catch(() => {});
         };
         abortController.signal.addEventListener('abort', classificationAbortHandler);
         try {
@@ -985,14 +1005,17 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
                 COMPOSER_ROUTER_TOOL.function.parameters,
                 async () => { return { status: 'success' }; }
               )
-            ]
+            ],
+            onSession: (s) => {
+              currentClassificationSession = s;
+              const unsub = attachClassificationListener(s);
+              return unsub;
+            }
           });
           await Promise.race([runPromise, abortPromise]);
         } finally {
           abortController.signal.removeEventListener('abort', classificationAbortHandler);
         }
-        
-        unsub();
 
         // Note: The type cast 'as ComposerRouteArguments | null' is required to prevent TypeScript's
         // control flow analysis from narrowing this asynchronously-mutated variable to 'null' (and thus 'never').
@@ -1027,7 +1050,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           };
           await secureWrite(res, `data: ${JSON.stringify(warnEvent)}\n\n`, isRequestClosed);
         }
-        await classificationSession.disconnect();
+        await currentClassificationSession.disconnect();
       } catch (err) {
         writeLog(`[Composer] Classification failed, falling back: ${err}`, LogLevel.WARN);
         activeStepGates = resolvePipeline('feature');

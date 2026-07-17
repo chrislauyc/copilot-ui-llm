@@ -61,6 +61,18 @@ export interface ForcedToolTurnOptions<T> {
   getResult: () => T | undefined;
   tools?: any[]; // CopilotSDK Tool array
   responseRequirements?: { toolCallExample?: string };
+  /**
+   * Called with every session this turn runs on -- the initial session, and
+   * each brand-new session object produced by `client.resumeSession()` on a
+   * nudge retry. `resumeSession` returns a *different* CopilotSession object
+   * each time, so any listener a caller attaches only to the session passed
+   * into `runForcedToolTurn` will silently stop firing the moment a retry
+   * happens. Callers that need to capture something off the tool call itself
+   * (e.g. its arguments), rather than just knowing a tool was called, should
+   * attach their listener here instead of on the original session, and return
+   * an unsubscribe function so it can be cleaned up before the next resume.
+   */
+  onSession?: (session: CopilotSession) => (() => void) | void;
 }
 
 export async function runForcedToolTurn<T>(
@@ -97,6 +109,7 @@ export async function runForcedToolTurn<T>(
   };
   
   let unsubTool = setupToolListener(currentSession);
+  let unsubOnSession = opts.onSession?.(currentSession) ?? undefined;
   
   await sendAndWaitWithAbort(currentSession, { prompt: initialPrompt }, timeoutMs, opts.abortSignal);
   
@@ -130,9 +143,11 @@ export async function runForcedToolTurn<T>(
     currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig);
     currentSessionId = currentSession.sessionId;
     
+    unsubOnSession?.();
     tracker = trackLastAssistantMessage(currentSession);
     toolCalled = false;
     unsubTool = setupToolListener(currentSession);
+    unsubOnSession = opts.onSession?.(currentSession) ?? undefined;
     
     const promptOpts = { prompt: nudge, tool_choice: undefined as any };
     if (executionConfig.provider === 'openrouter') {
@@ -146,6 +161,8 @@ export async function runForcedToolTurn<T>(
     unsubTool();
 
   }
+  
+  unsubOnSession?.();
   
   if (!toolCalled) {
     const toolNamesStr = targetTools.map(t => `'${t}'`).join(' or ');
