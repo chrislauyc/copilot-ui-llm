@@ -74,6 +74,7 @@ import { makeDockerToolHandler } from './utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './config/tools';
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from './config/gates';
 import { runSpecAudit } from './gates/specAuditor';
+import { runPbiDerivation } from './gates/pbiDerivation';
 import { sanitizeSensitives } from './utils/sanitizers';
 import { truncateOutput } from './utils/formatters';
 import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from './workspace';
@@ -1364,6 +1365,40 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
 
     // 3. Inform client
     res.json({ success: true, message: 'Spec patched successfully.' });
+  });
+
+  // PBI-derivation trigger (RM-REQ-070/071). Human-initiated: analyzes the
+  // spec identified by specId and returns a proposed set of PBIs via a
+  // forced tool call. Nothing is persisted by this endpoint -- accepting a
+  // derivation and persisting it is a separate, later operation (Issue 4).
+  app.post('/api/copilot/pbi-derivation', async (req, res) => {
+    const { specId, cwd } = req.body;
+
+    if (!specId || typeof specId !== 'string') {
+      res.status(400).json({ success: false, error: 'specId is required.' });
+      return;
+    }
+
+    let targetCwd: string;
+    try {
+      targetCwd = validateCwd(cwd || getWorkspaceRoot());
+    } catch (err: unknown) {
+      res.status(400).json({ success: false, error: `Invalid cwd: ${err instanceof Error ? err.message : String(err)}` });
+      return;
+    }
+
+    writeLog(`[PbiDerivation] Received derivation request for specId: ${specId}`);
+
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+
+    try {
+      const result = await runPbiDerivation(targetCwd, specId, controller.signal);
+      res.json({ success: true, specId: result.specId, pbis: result.pbis });
+    } catch (err: unknown) {
+      writeLog(`[PbiDerivation] Derivation failed for specId ${specId}: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // RESTful Panic Stop Route (SYS-REQ-017/018)
