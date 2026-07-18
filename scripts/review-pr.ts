@@ -184,7 +184,7 @@ async function main() {
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
     console.log(`No diff to review for range ${range}, skipping.`);
-    return;
+    process.exit(1);
   }
 
   const contextDir = join(process.cwd(), '.review-context');
