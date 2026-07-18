@@ -23,6 +23,8 @@ describe('PBI derivation operation', () => {
   const mockCwd = path.join(getWorkspaceRoot(), 'test-pbi-derivation-dir');
 
   beforeEach(() => {
+    db.prepare('DELETE FROM tasks').run();
+    db.prepare('DELETE FROM pbis').run();
     db.prepare('DELETE FROM specs').run();
     mockedExecuteAuditSession.mockReset();
     if (!fs.existsSync(mockCwd)) {
