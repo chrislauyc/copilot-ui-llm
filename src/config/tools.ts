@@ -103,6 +103,52 @@ export const submitSpecAuditTool = {
   }
 };
 
+export const submitPbiDerivationTool = {
+  type: 'function',
+  function: {
+    name: "submit_pbi_derivation",
+    description: "Submit the derived set of Product Backlog Items (PBIs) for a spec, including intra-batch dependency edges. This is a proposed set only -- nothing is persisted by this call.",
+    parameters: {
+      type: "object",
+      properties: {
+        pbis: {
+          type: "array",
+          description: "The proposed PBIs derived from the spec, in dependency-friendly order (a PBI should generally not depend on a PBI listed after it, though this is not strictly enforced).",
+          items: {
+            type: "object",
+            properties: {
+              batchId: {
+                type: "string",
+                description: "A short identifier unique within this batch (e.g. 'pbi-1'), used only to express dependsOn edges below. This is NOT a persisted database ID -- real pbiIds are assigned when the batch is accepted and persisted."
+              },
+              title: {
+                type: "string",
+                description: "Short, human-readable title for the PBI."
+              },
+              description: {
+                type: "string",
+                description: "A clear description of the scope and boundaries of this PBI."
+              },
+              status: {
+                type: "string",
+                enum: ["pending", "in_progress", "blocked", "done"],
+                description: "Initial status for a freshly derived PBI. Should almost always be 'pending' unless there is clear evidence in the repository that work has already started or finished."
+              },
+              dependsOn: {
+                type: "array",
+                items: { type: "string" },
+                description: "List of batchId values (from this same batch only) that this PBI depends on. Empty array if none."
+              }
+            },
+            required: ["batchId", "title", "description", "status", "dependsOn"]
+          }
+        }
+      },
+      required: ["pbis"]
+    }
+  }
+};
+
 export const submitCodeReviewTool = {
   type: 'function',
   function: {
