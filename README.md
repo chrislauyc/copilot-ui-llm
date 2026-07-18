@@ -17,7 +17,7 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 - **High:** Structured output always via tool calls, never prompted raw JSON text blocks.
 - **Medium:** Automated decision logging via immutable runtime audit trail.
 - **Medium:** Persistent, versioned task decomposition artifacts (SQLite) rather than throwaway conversational breakdowns.
-- **Medium:** Task-Based Execution — The planner (expensive model) decomposes a user goal into structured tasks stored in SQLite (`pending → running → blocked | done`). This creates a hierarchy of `spec (file in git) → tasks (SQLite) → sessions (execution attempts)`. The executor (cheap model) receives one task at a time as a narrow directive, with each task subject to the standard gate loop. Cross-task context is preserved via a workingMemory summary — appended after each completed task and injected as a prefix to the next. Blockers filed during execution route through the resolver/escalation mechanism.
+- **Medium:** Task-Based Execution — The planner (expensive model) decomposes a user goal into structured tasks stored in SQLite (`pending → running → blocked | done`). This creates a hierarchy of `spec (file in git) → PBIs (derived, dependency-graphed) → tasks (SQLite, ordered within a PBI) → sessions (execution attempts)`. The executor (cheap model) receives one task at a time as a narrow directive, with each task subject to the standard gate loop. Cross-task context is preserved via a workingMemory summary — appended after each completed task and injected as a prefix to the next. Blockers filed during execution route through the resolver/escalation mechanism.
   - **Working Memory Contract Defined:**
     - (1) **Schema/Format:** Structured markdown summary tokens comprising `[Task Summary]`, `[Key Decisions]`, and `[Pending Blockers]`.
     - (2) **Size/Token Limit:** Capped strictly at 40,000 characters (approx. 8,000 tokens) to guarantee compatibility with Gemini context bounds.
@@ -42,7 +42,7 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 
 ### 1.3 Safety Circuits
 
-- **ORCH-REQ-006 (Unwanted Behavior):** **If** the autonomous execution loop reaches `MAX_LOOP_CYCLE_CEILING = 10`, **then** the Orchestrator Server shall park the task (transitioning its status to `blocked`, committing or stashing the active workspace state, and checkout the base trunk branch), and automatically pull the next unblocked task to continue execution without a hard system halt.
+- **ORCH-REQ-006 (Unwanted Behavior):** **If** the autonomous execution loop reaches `MAX_LOOP_CYCLE_CEILING = 10`, **then** the Orchestrator Server shall park the task (transitioning its status to `blocked`, committing or stashing the active workspace state, and checkout the base trunk branch), and automatically pull the next unblocked task within a PBI to continue execution without a hard system halt.
 
 ---
 
@@ -68,7 +68,7 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 
 ### 2.2 The Spec-Gate Auditor Role
 
-- **ORCH-REQ-009 (Event-Driven):** **When** a deterministic gate execution fails or an Executor completes a task blueprint, the Gate Pipeline shall instantiate a dedicated, out-of-band Spec-Gate Auditor model context as a discrete evaluation step distinct from the Code Auditor.
+- **ORCH-REQ-009 (Event-Driven):** **When** a deterministic gate execution fails or an Executor completes a task blueprint, the Gate Pipeline shall instantiate a dedicated, out-of-band Spec-Gate Auditor model context as a discrete evaluation step distinct from the Code Auditor. *(Scope note: since tasks are now ordered within a PBI, the Spec-Gate Auditor's evaluation is scoped to the owning PBI where relevant — e.g. cross-task consistency checks compare against sibling tasks within the same PBI rather than across the full spec.)*
 - **ORCH-REQ-010 (State-Driven):** **While** evaluating workspace modifications, the Spec-Gate Auditor shall accept only the raw code changes (diffs) and the primary technical design specification file (e.g., `architecture-spec.md`), remaining completely blind to the Executor’s conversational history logs, intermediate thought tokens, and internal retry attempts.
 - **ORCH-REQ-011 (Unwanted Behavior):** **If** the Spec-Gate Auditor detects a structural deviation between the workspace mutations and the rules defined in the specification file, **then** it shall return a structured `SPEC_VIOLATION` tool response to the Orchestrator, failing the gate pipeline and forcing the active session to alter its task blueprint or escalate.
 
