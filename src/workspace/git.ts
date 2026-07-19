@@ -477,11 +477,6 @@ export class GitSandbox {
     }
 
     /**
-     * Compares the current working tree against the staging area.
-     * Captures ONLY unstaged local changes; modifications already added via
-     * `git add` are not included.
-     */
-    /**
      * Returns the diff of `pbi/<pbiId>` against the base trunk branch —
      * i.e. everything the PBI's tasks have accumulated so far, regardless of
      * what's currently checked out or staged. Used by the compliance-audit
@@ -501,6 +496,11 @@ export class GitSandbox {
         return this.baseBranch;
     }
 
+    /**
+     * Compares the current working tree against the staging area.
+     * Captures ONLY unstaged local changes; modifications already added via
+     * `git add` are not included.
+     */
     private async _getGitDiffAsync(): Promise<string> {
         return this.git(["diff"]);
     }

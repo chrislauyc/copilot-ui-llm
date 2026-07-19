@@ -77,13 +77,12 @@ export async function runComplianceAudit(
   }
 
   const sandbox = getGitSandbox();
-  let diff = '';
-  try {
-    diff = await sandbox.getPbiDiffAsync(pbiId);
-  } catch (e: unknown) {
-    const errObj = e as Record<string, unknown> | null;
-    diff = errObj && 'stdout' in errObj ? String(errObj.stdout) : '';
-  }
+  // git diff base...pbi returns exit 0 with empty stdout when there are no
+  // commits yet -- that's the legitimate "nothing to audit" case handled
+  // below. A thrown error here means something actually went wrong (missing
+  // pbi/<pbiId> branch, git failure, etc.) and must propagate rather than be
+  // silently treated as a clean, model-free pass.
+  const diff = await sandbox.getPbiDiffAsync(pbiId);
 
   if (!diff.trim()) {
     // Nothing accumulated on the PBI branch yet -- nothing to audit.
