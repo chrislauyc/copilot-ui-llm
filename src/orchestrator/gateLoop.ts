@@ -1033,7 +1033,10 @@ export const handleGateLoop = async (
             writeLog(
               `[GateLoop] Task ${activeTaskId} has no existing branch. Creating new branch.`,
             );
-            await getGitSandbox().checkoutTaskBranch(activeTaskId);
+            await getGitSandbox().checkoutTaskBranch(
+              activeTaskId,
+              taskRecord?.pbiId ?? undefined,
+            );
           }
         } catch (err) {
           writeLog(
@@ -1480,7 +1483,10 @@ export const handleGateLoop = async (
               writeLog(
                 `[GateLoop] Task ${activeTaskId} has no existing branch. Creating new branch.`,
               );
-              await getGitSandbox().checkoutTaskBranch(activeTaskId);
+              await getGitSandbox().checkoutTaskBranch(
+                activeTaskId,
+                taskRecord?.pbiId ?? undefined,
+              );
             }
           } catch (err) {
             writeLog(
@@ -2712,6 +2718,76 @@ export const handleGateLoop = async (
               );
             } catch (e: unknown) {
               // suppress git error output
+            }
+
+            // RM-REQ-014/015: fast-forward the completed task branch into
+            // pbi/<pbiId> when this task belongs to a PBI. Trunk is never
+            // touched here (RM-REQ-017) — that happens only via human PR
+            // review once the PBI's compliance audit is clean.
+            if (sessionId && activeSessions.has(sessionId)) {
+              const currentSession = activeSessions.get(sessionId)!;
+              const doneTaskId = currentSession.taskId;
+              const doneTask = doneTaskId ? getTask(doneTaskId) : undefined;
+              if (doneTask && doneTask.pbiId) {
+                try {
+                  await getGitSandbox().mergeTaskIntoPbi(
+                    doneTask.taskId,
+                    doneTask.pbiId,
+                  );
+                  writeLog(
+                    `[GateLoop] Fast-forward merged task/${doneTask.taskId} into pbi/${doneTask.pbiId}.`,
+                  );
+                } catch (mergeErr) {
+                  // RM-REQ-015: no auto three-way merge — fail loudly and
+                  // escalate for human/manual resolution instead.
+                  writeLog(
+                    `[GateLoop] Fast-forward merge of task/${doneTask.taskId} into pbi/${doneTask.pbiId} failed: ${mergeErr}`,
+                    LogLevel.ERROR,
+                  );
+                  // Revert the done marking: RM-REQ-014 ties "done" to a
+                  // successfully merged task. Leaving it "done" here would
+                  // let RM-REQ-011 (all-tasks-done → compliance audit) and
+                  // RM-REQ-017 (PR-ready marking) treat the PBI as complete
+                  // when its work never actually landed on pbi/<pbiId>.
+                  try {
+                    const staleTask = getTask(doneTask.taskId);
+                    if (staleTask) {
+                      saveTask({
+                        ...staleTask,
+                        status: "blocked",
+                        blockedReason: `pbi-ff-merge failed: ${String(mergeErr)}`,
+                        updatedAt: Date.now(),
+                      });
+                    }
+                  } catch (revertErr) {
+                    writeLog(
+                      `[GateLoop] Failed to revert task status after merge failure: ${revertErr}`,
+                      LogLevel.ERROR,
+                    );
+                  }
+                  try {
+                    appendEscalation({
+                      sessionId,
+                      summary:
+                        `Task ${doneTask.taskId} completed but could not be ` +
+                        `fast-forward merged into pbi/${doneTask.pbiId}. The task ` +
+                        `branch has diverged from the PBI integration branch. ` +
+                        `Manual resolution required: rebase task/${doneTask.taskId} ` +
+                        `onto the current pbi/${doneTask.pbiId} tip, or restart the ` +
+                        `task fresh off the current PBI tip. Task status reverted to ` +
+                        `'blocked' pending resolution.`,
+                      failedGate: "pbi-ff-merge",
+                      failedGateFeedback: String(mergeErr),
+                      retryHistory: [],
+                    });
+                  } catch (escalateErr) {
+                    writeLog(
+                      `[GateLoop] Failed to record merge-failure escalation: ${escalateErr}`,
+                      LogLevel.ERROR,
+                    );
+                  }
+                }
+              }
             }
 
             if (sessionId && activeSessions.has(sessionId)) {

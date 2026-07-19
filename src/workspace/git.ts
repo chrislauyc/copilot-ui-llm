@@ -146,13 +146,46 @@ export class GitSandbox {
         return this.withLock(() => this.git(["checkout", branchName]));
     }
 
-    public async checkoutTaskBranch(taskId: string): Promise<string> {
+    /**
+     * Ensures `pbi/<pbiId>` exists, branched off trunk if it doesn't already.
+     * Leaves the sandbox checked out on `pbi/<pbiId>`. Idempotent — safe to
+     * call on every task within a PBI, not just the first.
+     * (RM-REQ-014: PBI-level integration branch, created off trunk when a
+     * PBI's first task begins.)
+     */
+    private async ensurePbiBranchImpl(pbiId: string): Promise<void> {
+        const pbiBranch = `pbi/${pbiId}`;
+        const exists = await this.git(["branch", "--list", pbiBranch]).then(
+            (out) => out.trim().length > 0
+        );
+        if (exists) {
+            await this.git(["checkout", pbiBranch]);
+            return;
+        }
+        await this.checkoutBaseBranch();
+        await this.git(["checkout", "-b", pbiBranch]);
+    }
+
+    public async ensurePbiBranch(pbiId: string): Promise<void> {
+        return this.withLock(() => this.ensurePbiBranchImpl(pbiId));
+    }
+
+    /**
+     * Branches a task off `pbi/<pbiId>` when a PBI context exists, or off
+     * trunk directly when it doesn't (non-PBI tasks keep the original
+     * behavior). (RM-REQ-014.)
+     */
+    public async checkoutTaskBranch(taskId: string, pbiId?: string): Promise<string> {
         return this.withLock(async () => {
-            // Return to base branch first so we don't try to delete the active branch
+            // Return to the correct base first so we don't try to delete the active branch.
             try {
-                await this.checkoutBaseBranch();
+                if (pbiId) {
+                    await this.ensurePbiBranchImpl(pbiId);
+                } else {
+                    await this.checkoutBaseBranch();
+                }
             } catch (e) {
-                console.warn(`[GitSandbox] Failed to checkout base branch:`, e);
+                console.warn(`[GitSandbox] Failed to checkout base for task branch:`, e);
                 // Ignore failure if we can't switch, but try to proceed
             }
 
@@ -179,6 +212,34 @@ export class GitSandbox {
                 // Ignore or log error
             }
             return out;
+        });
+    }
+
+    /**
+     * Fast-forward-merges `task/<taskId>` into `pbi/<pbiId>` on task completion.
+     * Throws (no auto three-way merge) if a fast-forward is not possible —
+     * callers are expected to catch this and raise an escalation.
+     * Leaves the sandbox back on the base trunk branch afterward, win or lose,
+     * consistent with `parkTaskBranch`. Trunk itself is never touched here
+     * (RM-REQ-014/RM-REQ-017 — trunk stays untouched until human PR review).
+     */
+    public async mergeTaskIntoPbi(taskId: string, pbiId: string): Promise<void> {
+        return this.withLock(async () => {
+            const pbiBranch = `pbi/${pbiId}`;
+            try {
+                await this.git(["checkout", pbiBranch]);
+                await this.git(["merge", "--ff-only", `task/${taskId}`]);
+            } finally {
+                // Always return to base branch afterward, success or failure —
+                // including if the checkout of pbiBranch itself failed (e.g.
+                // pbi/<pbiId> doesn't exist) — so the sandbox is never left
+                // stuck mid-operation for the next task.
+                try {
+                    await this.checkoutBaseBranch();
+                } catch (e) {
+                    console.warn(`[GitSandbox] Failed to checkout base branch after merge:`, e);
+                }
+            }
         });
     }
 
