@@ -477,6 +477,26 @@ export class GitSandbox {
     }
 
     /**
+     * Returns the diff of `pbi/<pbiId>` against the base trunk branch —
+     * i.e. everything the PBI's tasks have accumulated so far, regardless of
+     * what's currently checked out or staged. Used by the compliance-audit
+     * operation (RM-REQ-010), which audits the PBI's accumulated diff, not
+     * the working tree.
+     */
+    public async getPbiDiffAsync(pbiId: string): Promise<string> {
+        return this.withLock(() =>
+            this.git(["diff", `${this.baseBranch}...pbi/${pbiId}`])
+        );
+    }
+
+    /**
+     * The trunk/base branch name this sandbox is targeting (e.g. "main").
+     */
+    public getBaseBranchName(): string {
+        return this.baseBranch;
+    }
+
+    /**
      * Compares the current working tree against the staging area.
      * Captures ONLY unstaged local changes; modifications already added via
      * `git add` are not included.

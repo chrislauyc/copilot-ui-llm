@@ -56,6 +56,17 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
     expect(mockedExecuteAuditSession).not.toHaveBeenCalled();
   });
 
+  it('throws when pbi/<pbiId> does not exist as a branch, rather than treating it as a clean empty-diff pass', async () => {
+    const pbiId = 'pbi-no-branch-ever-created';
+    registerPbi(pbiId);
+    // Deliberately never call ensurePbiBranch/checkoutTaskBranch for this
+    // pbiId, so `git diff base...pbi/<pbiId>` fails for real (unknown
+    // revision), rather than the legitimate "no commits yet" empty-stdout
+    // case. This must propagate as an error, not be reported as pass=true.
+    await expect(runComplianceAudit(getWorkspaceRoot(), pbiId)).rejects.toThrow();
+    expect(mockedExecuteAuditSession).not.toHaveBeenCalled();
+  });
+
   it('short-circuits with pass=true and no model call when pbi/<pbiId> has no diff against trunk', async () => {
     const pbiId = 'pbi-empty-diff';
     registerPbi(pbiId);
