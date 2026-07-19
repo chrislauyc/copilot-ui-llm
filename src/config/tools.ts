@@ -103,6 +103,42 @@ export const submitSpecAuditTool = {
   }
 };
 
+export const submitComplianceAuditTool = {
+  type: 'function',
+  function: {
+    name: "submit_compliance_audit",
+    description: "Submit the result of a PBI-level compliance audit: whether the PBI's accumulated diff (against trunk) satisfies the relevant subset of the spec, and a structured list of findings if not. Findings become new remediation tasks directly -- do not describe them as prose.",
+    parameters: {
+      type: "object",
+      properties: {
+        pass: {
+          type: "boolean",
+          description: "True if the PBI's diff fully satisfies the relevant spec requirements with no findings. False if there is at least one finding."
+        },
+        findings: {
+          type: "array",
+          description: "One entry per distinct issue found. Empty if pass is true. Each finding becomes a new remediation task within the same PBI.",
+          items: {
+            type: "object",
+            properties: {
+              title: {
+                type: "string",
+                description: "Short, human-readable title for the remediation task this finding will become."
+              },
+              description: {
+                type: "string",
+                description: "Concrete description of the gap or deviation, and what the remediation task must do to close it."
+              }
+            },
+            required: ["title", "description"]
+          }
+        }
+      },
+      required: ["pass", "findings"]
+    }
+  }
+};
+
 export const submitPbiDerivationTool = {
   type: 'function',
   function: {
