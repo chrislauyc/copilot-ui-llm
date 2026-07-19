@@ -2759,8 +2759,50 @@ export const handleGateLoop = async (
                       } else {
                         writeLog(
                           `[GateLoop] Compliance audit for pbi/${doneTask.pbiId} reported ${auditResult.findings.length} finding(s); ` +
-                          `created remediation tasks: ${auditResult.remediationTaskIds.join(', ')}.`,
+                          `scenario: ${auditResult.scenario}; ` +
+                          `created remediation tasks: ${auditResult.remediationTaskIds.join(', ') || '(none)'}.`,
                         );
+
+                        // Issue 81 / RM-REQ-021/022: the audit's own tier
+                        // escalating, or the PBI getting parked, are distinct
+                        // from an ordinary first-pass finding (which already
+                        // has a natural trail via the created remediation
+                        // tasks) -- raise a dedicated escalation entry so
+                        // these scenarios are distinguishable in the UI.
+                        if (
+                          sessionId &&
+                          (auditResult.scenario === "findings-audit-escalated" ||
+                            auditResult.scenario === "findings-pbi-parked")
+                        ) {
+                          try {
+                            const summary =
+                              auditResult.scenario === "findings-pbi-parked"
+                                ? `Compliance audit for pbi/${doneTask.pbiId} still found ${auditResult.findings.length} issue(s) ` +
+                                  `after a full remediation cycle at the highest auditor tier (tier ${auditResult.auditTierIndex}). ` +
+                                  `The entire PBI has been parked (status: blocked) rather than creating further remediation tasks. ` +
+                                  `Manual review required.`
+                                : `Compliance audit for pbi/${doneTask.pbiId} still found ${auditResult.findings.length} issue(s) ` +
+                                  `after a full remediation cycle. Escalated the compliance auditor to tier ${auditResult.auditTierIndex} ` +
+                                  `and created new remediation tasks: ${auditResult.remediationTaskIds.join(', ')}.`;
+                            appendEscalation({
+                              sessionId,
+                              summary,
+                              failedGate:
+                                auditResult.scenario === "findings-pbi-parked"
+                                  ? "compliance-audit-pbi-parked"
+                                  : "compliance-audit-tier-escalated",
+                              failedGateFeedback: auditResult.findings
+                                .map((f) => `${f.title}: ${f.description}`)
+                                .join("\n"),
+                              retryHistory: [],
+                            });
+                          } catch (escalateErr) {
+                            writeLog(
+                              `[GateLoop] Failed to record compliance-audit escalation entry: ${escalateErr}`,
+                              LogLevel.ERROR,
+                            );
+                          }
+                        }
                       }
                     }
                   } catch (auditErr) {
