@@ -50,6 +50,7 @@ import {
   resolvePipeline,
 } from "../config/gates";
 import { runSpecAudit } from "../gates/specAuditor";
+import { runComplianceAudit, shouldTriggerComplianceAudit } from "../gates/complianceAudit";
 import { validateCwd } from "../security/pathGuard";
 import { sanitizeSensitives } from "../utils/sanitizers";
 import { truncateOutput } from "../utils/formatters";
@@ -2737,6 +2738,58 @@ export const handleGateLoop = async (
                   writeLog(
                     `[GateLoop] Fast-forward merged task/${doneTask.taskId} into pbi/${doneTask.pbiId}.`,
                   );
+
+                  // RM-REQ-011/012: auto-trigger a compliance audit when all
+                  // tasks for this PBI are done, or (if configured) every N
+                  // completed tasks as a periodic drift check.
+                  try {
+                    const trigger = shouldTriggerComplianceAudit(doneTask.pbiId);
+                    if (trigger.trigger) {
+                      writeLog(
+                        `[GateLoop] Triggering compliance audit for pbi/${doneTask.pbiId} (reason: ${trigger.reason}).`,
+                      );
+                      const auditResult = await runComplianceAudit(
+                        runCwd,
+                        doneTask.pbiId,
+                      );
+                      if (auditResult.pass) {
+                        writeLog(
+                          `[GateLoop] Compliance audit for pbi/${doneTask.pbiId} passed clean.`,
+                        );
+                      } else {
+                        writeLog(
+                          `[GateLoop] Compliance audit for pbi/${doneTask.pbiId} reported ${auditResult.findings.length} finding(s); ` +
+                          `created remediation tasks: ${auditResult.remediationTaskIds.join(', ')}.`,
+                        );
+                      }
+                    }
+                  } catch (auditErr) {
+                    // A failed audit *invocation* (not a failed audit result)
+                    // is logged and escalated, but must not be allowed to
+                    // undo the merge that already succeeded above.
+                    writeLog(
+                      `[GateLoop] Compliance audit for pbi/${doneTask.pbiId} failed to run: ${auditErr}`,
+                      LogLevel.ERROR,
+                    );
+                    if (sessionId) {
+                      try {
+                        appendEscalation({
+                          sessionId,
+                          summary:
+                            `Compliance audit for pbi/${doneTask.pbiId} could not be run ` +
+                            `after task ${doneTask.taskId} completed: ${String(auditErr)}`,
+                          failedGate: "compliance-audit-invocation",
+                          failedGateFeedback: String(auditErr),
+                          retryHistory: [],
+                        });
+                      } catch (escalateErr) {
+                        writeLog(
+                          `[GateLoop] Failed to record compliance-audit-invocation escalation: ${escalateErr}`,
+                          LogLevel.ERROR,
+                        );
+                      }
+                    }
+                  }
                 } catch (mergeErr) {
                   // RM-REQ-015: no auto three-way merge — fail loudly and
                   // escalate for human/manual resolution instead.
