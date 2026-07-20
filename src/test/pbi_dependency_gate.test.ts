@@ -13,6 +13,7 @@ describe('Dependency-blocked PBI escalation (Issue 80 / RM-REQ-060/061/062)', ()
   const specId = 'spec-dep-gate-test';
 
   beforeEach(() => {
+    db.prepare('DELETE FROM sessions').run();
     db.prepare('DELETE FROM tasks').run();
     db.prepare('DELETE FROM pbis').run();
     db.prepare('DELETE FROM specs').run();
