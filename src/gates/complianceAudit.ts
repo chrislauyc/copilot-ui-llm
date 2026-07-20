@@ -3,6 +3,7 @@ import { submitComplianceAuditTool } from '../config/tools';
 import { getGitSandbox, getExecCommand, getWorkspaceRoot } from '../workspace';
 import { getPbi, savePbi } from '../db/pbiStore';
 import { getTasksForPbi, saveTask, getSpec, TaskRecord } from '../db/taskStore';
+import { getAuditorMaxTierIndex } from '../config/models';
 import crypto from 'crypto';
 
 export interface ComplianceFinding {
@@ -10,12 +11,40 @@ export interface ComplianceFinding {
   readonly description: string;
 }
 
+/**
+ * Distinguishes the remediation scenario an audit result falls into
+ * (Issue 81 acceptance criteria: "Escalation entries distinguish between
+ * different remediation scenarios"):
+ * - 'clean': no findings; PBI marked done.
+ * - 'findings-first-pass': findings on the first audit of this cycle;
+ *   remediation tasks created via the normal task escalation ladder,
+ *   audit's own tier unchanged.
+ * - 'findings-audit-escalated': the *next* audit after a remediation cycle
+ *   completed still found issues -- the audit's own model tier is escalated
+ *   (RM-REQ-021) and further remediation tasks are created at the new tier.
+ * - 'findings-pbi-parked': the audit was already on its highest tier and
+ *   still found issues after a full remediation cycle -- the entire PBI is
+ *   parked and a human escalation is raised (RM-REQ-022), no further
+ *   remediation tasks are created.
+ */
+export type ComplianceAuditScenario =
+  | 'clean'
+  | 'findings-first-pass'
+  | 'findings-audit-escalated'
+  | 'findings-pbi-parked';
+
 export interface ComplianceAuditResult {
   readonly pbiId: string;
   readonly pass: boolean;
   readonly findings: readonly ComplianceFinding[];
   /** taskIds of the remediation tasks created for this audit's findings, if any. */
   readonly remediationTaskIds: readonly string[];
+  /** Which remediation scenario this result represents (Issue 81). */
+  readonly scenario: ComplianceAuditScenario;
+  /** The auditor tier index this audit ran at. */
+  readonly auditTierIndex: number;
+  /** True if this audit result parked the entire PBI (RM-REQ-022). */
+  readonly pbiParked: boolean;
 }
 
 interface ComplianceAuditToolResult {
@@ -88,7 +117,15 @@ export async function runComplianceAudit(
     // Nothing accumulated on the PBI branch yet -- nothing to audit.
     // Deliberately does not mark the PBI done: an empty diff is not the
     // same claim as "the diff satisfies the spec".
-    return { pbiId, pass: true, findings: [], remediationTaskIds: [] };
+    return {
+      pbiId,
+      pass: true,
+      findings: [],
+      remediationTaskIds: [],
+      scenario: 'clean',
+      auditTierIndex: pbi.auditTierIndex ?? 0,
+      pbiParked: false,
+    };
   }
 
   // Spec scoping: the roadmap calls for auditing against "the subset of the
@@ -113,7 +150,8 @@ export async function runComplianceAudit(
     }
   }
 
-  const executionConfig = getAuditorExecutionConfig();
+  const auditTierIndex = pbi.auditTierIndex ?? 0;
+  const executionConfig = getAuditorExecutionConfig(undefined, auditTierIndex);
   const userPrompt = buildUserPrompt(pbi.title, pbi.description ?? '', specContent, diff);
 
   const result = await executeAuditSession<ComplianceAuditToolResult>(
@@ -133,16 +171,82 @@ export async function runComplianceAudit(
   }
 
   if (result.pass && result.findings.length === 0) {
-    savePbi({ ...pbi, status: 'done', updatedAt: Date.now() });
-    return { pbiId, pass: true, findings: [], remediationTaskIds: [] };
+    // A clean pass resets the audit escalation ladder (RM-REQ-021 only
+    // applies to *repeated* failures) -- a subsequent finding on some later
+    // remediation cycle should start back at tier 0, not inherit an
+    // escalated tier from an unrelated earlier cycle.
+    savePbi({
+      ...pbi,
+      status: 'done',
+      auditTierIndex: 0,
+      lastAuditHadFindings: false,
+      updatedAt: Date.now(),
+    });
+    return {
+      pbiId,
+      pass: true,
+      findings: [],
+      remediationTaskIds: [],
+      scenario: 'clean',
+      auditTierIndex: 0,
+      pbiParked: false,
+    };
   }
 
-  // RM-REQ-013: findings create new tasks via this structured tool-call
-  // result directly, not by writing prose for the regex-based decomposer.
-  const existingTasks = getTasksForPbi(pbiId);
+  // RM-REQ-021: distinguish a first-time finding (mid-cycle, tier
+  // unchanged) from a *repeat* finding after a full remediation cycle.
+  // `lastAuditHadFindings` alone is not sufficient: shouldTriggerComplianceAudit's
+  // periodic trigger (RM-REQ-012) can fire this audit again while some of the
+  // prior cycle's remediation tasks (which carry this same pbiId) are still
+  // pending -- e.g. one remediation task done, others not, but doneCount hits
+  // another periodic multiple. Escalating the audit tier or parking the PBI
+  // in that situation would be premature: the remediation cycle hasn't
+  // actually finished yet, so this audit run doesn't tell us anything about
+  // whether the remediation worked. Only treat this as a genuine repeat
+  // failure once every task on the PBI (including all remediation tasks) is
+  // done -- i.e. this audit was reached via the end-of-pbi trigger, or a
+  // periodic trigger that happens to coincide with full completion.
+  const allTasksForPbiDone = (() => {
+    const tasks = getTasksForPbi(pbiId);
+    return tasks.length > 0 && tasks.every((t) => t.status === 'done');
+  })();
+  const isRepeatFailure = pbi.lastAuditHadFindings === true && allTasksForPbiDone;
+  const now = Date.now();
+
+  if (isRepeatFailure) {
+    const maxTierIndex = getAuditorMaxTierIndex();
+    if (auditTierIndex >= maxTierIndex) {
+      // RM-REQ-022: highest-tier persistent failure after a full
+      // remediation cycle -- park the entire PBI (not just individual
+      // tasks) rather than spinning up yet more remediation tasks, and
+      // signal the caller to raise an async human escalation.
+      savePbi({
+        ...pbi,
+        status: 'blocked',
+        auditTierIndex,
+        lastAuditHadFindings: true,
+        updatedAt: now,
+      });
+      return {
+        pbiId,
+        pass: false,
+        findings: result.findings,
+        remediationTaskIds: [],
+        scenario: 'findings-pbi-parked',
+        auditTierIndex,
+        pbiParked: true,
+      };
+    }
+  }
+
+  // RM-REQ-013/RM-REQ-020: findings create new remediation tasks via this
+  // structured tool-call result directly, not by writing prose for the
+  // regex-based decomposer. These tasks then go through the *same* tiered
+  // task-escalation ladder (retry same model -> escalate model tier -> park)
+  // that gateLoop.ts already applies to every ordinary task -- no separate
+  // remediation-specific ladder is needed for the tasks themselves.
   const specVersion = specRecord?.version ?? 'unknown';
   const remediationTaskIds: string[] = [];
-  const now = Date.now();
 
   for (const finding of result.findings) {
     const taskId = `${pbiId}-remediation-${crypto.randomBytes(4).toString('hex')}`;
@@ -165,14 +269,28 @@ export async function runComplianceAudit(
     remediationTaskIds.push(taskId);
   }
 
-  // RM-REQ-013: mark the PBI's completion state as not-yet-satisfied.
-  savePbi({ ...pbi, status: 'in_progress', updatedAt: now });
+  const nextAuditTierIndex = isRepeatFailure ? auditTierIndex + 1 : auditTierIndex;
+
+  // RM-REQ-013: mark the PBI's completion state as not-yet-satisfied, and
+  // (RM-REQ-021) escalate the audit's own tier if this was a repeat failure,
+  // recording that a finding is now pending so the *next* audit for this PBI
+  // is correctly recognized as a potential repeat.
+  savePbi({
+    ...pbi,
+    status: 'in_progress',
+    auditTierIndex: nextAuditTierIndex,
+    lastAuditHadFindings: true,
+    updatedAt: now,
+  });
 
   return {
     pbiId,
     pass: false,
     findings: result.findings,
     remediationTaskIds,
+    scenario: isRepeatFailure ? 'findings-audit-escalated' : 'findings-first-pass',
+    auditTierIndex: nextAuditTierIndex,
+    pbiParked: false,
   };
 }
 

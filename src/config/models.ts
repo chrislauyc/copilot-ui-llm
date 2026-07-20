@@ -24,6 +24,7 @@ export interface SystemRolesConfig {
   readonly planner: ModelProviderConfig;
   readonly executorTiers: readonly ModelProviderConfig[]; // Tiered ladder for execution
   readonly auditor: ModelProviderConfig;
+  readonly auditorTiers: readonly ModelProviderConfig[]; // Tiered escalation ladder for the compliance-audit operation (Issue 81)
   readonly reviewer: ModelProviderConfig;
 }
 
@@ -129,6 +130,39 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
       tokenRatio: 3.5,
     };
   },
+  /**
+   * Tiered escalation ladder for auditor roles (Issue 81 / RM-REQ-021):
+   * mirrors executorTiers' shape so compliance-audit re-runs can escalate to
+   * a stronger model when repeated audits keep finding issues after a full
+   * remediation cycle. Tier 0 intentionally matches the `auditor` getter
+   * above (including its AUDITOR_PROVIDER/AUDITOR_MODEL env override) so
+   * existing single-tier auditor configuration keeps working unchanged.
+   */
+  get auditorTiers(): readonly ModelProviderConfig[] {
+    return [
+      this.auditor,
+      {
+        provider:
+          (typeof process !== "undefined" &&
+            (isProviderType(process.env?.AUDITOR_TIER_1_PROVIDER) ? process.env?.AUDITOR_TIER_1_PROVIDER : undefined)) ||
+          "gemini",
+        model:
+          (typeof process !== "undefined" && process.env?.AUDITOR_TIER_1_MODEL) ||
+          "gemini-3.5-flash",
+        tokenRatio: 3.5,
+      },
+      {
+        provider:
+          (typeof process !== "undefined" &&
+            (isProviderType(process.env?.AUDITOR_TIER_2_PROVIDER) ? process.env?.AUDITOR_TIER_2_PROVIDER : undefined)) ||
+          "gemini",
+        model:
+          (typeof process !== "undefined" && process.env?.AUDITOR_TIER_2_MODEL) ||
+          "gemini-3.1-pro-preview",
+        tokenRatio: 3.0,
+      },
+    ];
+  },
   get reviewer() {
     return {
       provider:
@@ -164,4 +198,29 @@ export function getNextTier(model: string): string | null {
     return null;
   }
   return MODEL_TIERS[index + 1] || null;
+}
+
+/**
+ * Index-based accessor for the auditor tier ladder (Issue 81 / RM-REQ-021).
+ * Clamps to the highest configured tier rather than throwing, mirroring
+ * getExecutorTier's clamping behavior -- callers track tier progress by
+ * index (persisted on the PBI record), not by model name.
+ */
+export function getAuditorTierConfig(tierIndex: number): ModelProviderConfig {
+  const tiers = DEFAULT_ROLES_CONFIG.auditorTiers;
+  if (tiers.length === 0) {
+    throw new Error("No auditor tiers defined");
+  }
+  if (tierIndex < 0) {
+    return tiers[0]!;
+  }
+  if (tierIndex >= tiers.length) {
+    return tiers[tiers.length - 1]!;
+  }
+  return tiers[tierIndex]!;
+}
+
+/** Highest valid auditor tier index -- reaching this and still failing is a terminal escalation (RM-REQ-022). */
+export function getAuditorMaxTierIndex(): number {
+  return DEFAULT_ROLES_CONFIG.auditorTiers.length - 1;
 }
