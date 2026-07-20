@@ -1,7 +1,7 @@
 import { runForcedToolTurn } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
-import { DEFAULT_ROLES_CONFIG } from '../config/models';
+import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig } from '../config/models';
 
 export interface ToolDefinition {
   readonly function: {
@@ -30,9 +30,14 @@ export interface ResponseRequirement {
 /**
  * Shared logic to resolve the auditor's execution configuration via ProviderRegistry.
  * Ensures both auditors respect DEFAULT_ROLES_CONFIG.auditor.provider. * Throws a loud error if no API key is available for the required provider.
+ *
+ * `tierIndex` selects a rung on the auditor escalation ladder (Issue 81 /
+ * RM-REQ-021), defaulting to tier 0 -- the same single-tier config this
+ * function always resolved before the ladder existed, so existing callers
+ * (e.g. the per-task Spec-Gate Auditor) are unaffected.
  */
-export function getAuditorExecutionConfig(apiKey?: string): ExecutionConfig {
-  const auditorConfig = DEFAULT_ROLES_CONFIG.auditor;
+export function getAuditorExecutionConfig(apiKey?: string, tierIndex: number = 0): ExecutionConfig {
+  const auditorConfig = getAuditorTierConfig(tierIndex);
   const provider = auditorConfig.provider;
   // Resolve the key based on the provider
   let keyToUse = apiKey;

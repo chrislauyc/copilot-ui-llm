@@ -30,7 +30,9 @@ db.exec(`
     status TEXT CHECK(status IN ('pending','in_progress','blocked','done')) DEFAULT 'pending',
     dependsOn TEXT,              -- JSON array of pbiIds
     createdAt INTEGER,
-    updatedAt INTEGER
+    updatedAt INTEGER,
+    auditTierIndex INTEGER DEFAULT 0,      -- Issue 81/RM-REQ-021: compliance-audit's own escalation tier
+    lastAuditHadFindings INTEGER DEFAULT 0 -- Issue 81: 0/1 -- was the most recent audit's result a finding (mid remediation cycle)?
   );
 
   CREATE TABLE IF NOT EXISTS tasks (
@@ -91,4 +93,12 @@ if (!sessionsColumns.some(col => col.name === 'taskId')) {
 const tasksColumns = db.pragma('table_info(tasks)') as { name: string }[];
 if (!tasksColumns.some(col => col.name === 'pbiId')) {
   db.prepare('ALTER TABLE tasks ADD COLUMN pbiId TEXT REFERENCES pbis(pbiId)').run();
+}
+
+const pbisColumns = db.pragma('table_info(pbis)') as { name: string }[];
+if (!pbisColumns.some(col => col.name === 'auditTierIndex')) {
+  db.prepare('ALTER TABLE pbis ADD COLUMN auditTierIndex INTEGER DEFAULT 0').run();
+}
+if (!pbisColumns.some(col => col.name === 'lastAuditHadFindings')) {
+  db.prepare('ALTER TABLE pbis ADD COLUMN lastAuditHadFindings INTEGER DEFAULT 0').run();
 }
