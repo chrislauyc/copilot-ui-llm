@@ -25,6 +25,7 @@ export interface SystemRolesConfig {
   readonly executorTiers: readonly ModelProviderConfig[]; // Tiered ladder for execution
   readonly auditor: ModelProviderConfig;
   readonly auditorTiers: readonly ModelProviderConfig[]; // Tiered escalation ladder for the compliance-audit operation (Issue 81)
+  readonly auditorPool: readonly ModelProviderConfig[]; // Round-robin rotation pool for the general auditor role (Issue 79)
   readonly reviewer: ModelProviderConfig;
 }
 
@@ -163,6 +164,25 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
       },
     ];
   },
+  /**
+   * Round-robin rotation pool for the general auditor role (Issue 79 /
+   * RM-REQ-030/031/032/033). Configured via a single `AUDITOR_POOL` env var
+   * of comma-separated `provider:model` entries, e.g.
+   * `AUDITOR_POOL=gemini:gemini-3.1-flash-lite,gemini:gemini-3.5-flash`.
+   * Falls back to a single-entry pool (this.auditor) when unset -- this is
+   * deliberately a single-model pool by default so the "single-model pool"
+   * warning (RM-REQ-032) surfaces until an operator opts into a real pool,
+   * rather than silently picking a diverse default nobody asked for.
+   *
+   * This pool is entirely independent of auditorTiers above: auditorTiers
+   * is the compliance-audit operation's own escalation ladder (Issue 81)
+   * and must not be conflated with this rotation pool (RM-REQ-033).
+   */
+  get auditorPool(): readonly ModelProviderConfig[] {
+    const raw = typeof process !== "undefined" ? process.env?.AUDITOR_POOL : undefined;
+    const parsed = parseAuditorPoolEnv(raw);
+    return parsed && parsed.length > 0 ? parsed : [this.auditor];
+  },
   get reviewer() {
     return {
       provider:
@@ -223,4 +243,59 @@ export function getAuditorTierConfig(tierIndex: number): ModelProviderConfig {
 /** Highest valid auditor tier index -- reaching this and still failing is a terminal escalation (RM-REQ-022). */
 export function getAuditorMaxTierIndex(): number {
   return DEFAULT_ROLES_CONFIG.auditorTiers.length - 1;
+}
+
+/**
+ * Parses the `AUDITOR_POOL` env var into a list of ModelProviderConfig
+ * entries (Issue 79 / RM-REQ-030). Expected format is comma-separated
+ * `provider:model` pairs, e.g.
+ * `"gemini:gemini-3.1-flash-lite,openai:gpt-4o-mini"`.
+ * Returns `null` (not an empty array) when `raw` is unset/blank so callers
+ * can distinguish "not configured" from "configured but empty" and fall
+ * back appropriately. Malformed entries (missing `:`, unknown provider) are
+ * skipped with a console warning rather than throwing, so a single typo in
+ * a long pool string doesn't take down the whole system.
+ */
+export function parseAuditorPoolEnv(raw: string | undefined): ModelProviderConfig[] | null {
+  if (!raw || !raw.trim()) {
+    return null;
+  }
+  const entries = raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  const pool: ModelProviderConfig[] = [];
+  for (const entry of entries) {
+    const separatorIndex = entry.indexOf(":");
+    if (separatorIndex === -1) {
+      console.warn(`[AUDITOR_POOL] Skipping malformed entry (expected "provider:model"): "${entry}"`);
+      continue;
+    }
+    const provider = entry.slice(0, separatorIndex).trim();
+    const model = entry.slice(separatorIndex + 1).trim();
+    if (!isProviderType(provider) || !model) {
+      console.warn(`[AUDITOR_POOL] Skipping malformed entry (unknown provider or empty model): "${entry}"`);
+      continue;
+    }
+    pool.push({ provider, model });
+  }
+  return pool;
+}
+
+/**
+ * Deterministic round-robin selection from the auditor pool (RM-REQ-031):
+ * `rotationIndex` is expected to be a monotonically increasing counter
+ * persisted in session state (see StateSnapshot.auditorRotationIndex) --
+ * this function itself is pure and does not mutate or persist anything.
+ * Negative indices wrap correctly (rather than throwing) purely as a
+ * defensive measure; callers should never pass a negative rotationIndex.
+ */
+export function selectFromAuditorPool(rotationIndex: number): ModelProviderConfig {
+  const pool = DEFAULT_ROLES_CONFIG.auditorPool;
+  if (pool.length === 0) {
+    throw new Error("Auditor pool is empty");
+  }
+  const normalizedIndex = ((rotationIndex % pool.length) + pool.length) % pool.length;
+  return pool[normalizedIndex]!;
 }

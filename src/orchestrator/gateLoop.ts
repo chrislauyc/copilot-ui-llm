@@ -51,6 +51,7 @@ import {
 } from "../config/gates";
 import { runSpecAudit } from "../gates/specAuditor";
 import { runComplianceAudit, shouldTriggerComplianceAudit } from "../gates/complianceAudit";
+import { selectRotatingAuditorConfig } from "../utils/auditorHelper";
 import { validateCwd } from "../security/pathGuard";
 import { sanitizeSensitives } from "../utils/sanitizers";
 import { truncateOutput } from "../utils/formatters";
@@ -431,6 +432,51 @@ export const activeBackgroundRuns = new Map<
     promise: Promise<void>;
   }
 >();
+
+/**
+ * Issue 79 / RM-REQ-030/031/032: pulls the current rotation index out of
+ * this session's persisted state, selects the next auditor from the pool,
+ * advances and persists the rotation index for next time, and logs the two
+ * required (non-blocking) warnings:
+ * - the configured pool has only one model (no real rotation possible), or
+ * - the selected auditor happens to match the Implementor's model for this
+ *   task (reduced decorrelation between "writer" and "checker").
+ *
+ * Deliberately independent of the compliance-audit tiering mechanism
+ * (Issue 81 / RM-REQ-021) -- that operation calls getAuditorExecutionConfig
+ * with a tierIndex directly and never goes through this rotation pool.
+ */
+function selectAndAdvanceAuditorRotation(
+  sessionId: string | undefined,
+  implementorModel: string | undefined,
+  apiKey: string | undefined,
+) {
+  const currentIndex = sessionId
+    ? (activeSessions.get(sessionId)?.stateSnapshot?.auditorRotationIndex ?? 0)
+    : 0;
+  const selection = selectRotatingAuditorConfig(currentIndex, apiKey);
+
+  if (selection.singleModelPool) {
+    writeLog(
+      `[GateLoop] Auditor pool has only a single model configured (${selection.executionConfig.model}); ` +
+      `no rotation is actually occurring. Configure AUDITOR_POOL with multiple models for real decorrelation.`,
+      LogLevel.WARN,
+    );
+  }
+  if (implementorModel && selection.executionConfig.model === implementorModel) {
+    writeLog(
+      `[GateLoop] Selected auditor model (${selection.executionConfig.model}) matches the Implementor's model ` +
+      `for this task; decorrelation between implementor and auditor is reduced for this attempt.`,
+      LogLevel.WARN,
+    );
+  }
+
+  if (sessionId) {
+    updateStateSnapshot(sessionId, { auditorRotationIndex: selection.nextRotationIndex });
+  }
+
+  return selection;
+}
 
 export const handleGateLoop = async (
   req: express.Request,
@@ -2394,11 +2440,17 @@ export const handleGateLoop = async (
                 } else if (gateName === "runAudit") {
                   const startAuditTime = Date.now();
                   const currentCodeState = await getCodeState(runCwd);
+                  const rotatingAuditorSelection = selectAndAdvanceAuditorRotation(
+                    sessionId,
+                    currentModel,
+                    keyToUse,
+                  );
                   const auditPayload = await runLlmAudit(
                     promptStr,
                     currentCodeState,
                     keyToUse,
                     abortController.signal,
+                    rotatingAuditorSelection.executionConfig,
                   );
                   const loopPassed = auditPayload.pass;
 
@@ -2620,9 +2672,15 @@ export const handleGateLoop = async (
                 isRequestClosed,
               );
 
+              const rotatingSpecAuditorSelection = selectAndAdvanceAuditorRotation(
+                sessionId,
+                currentModel,
+                keyToUse,
+              );
               const specResult = await runSpecAudit(
                 runCwd,
                 abortController.signal,
+                rotatingSpecAuditorSelection.executionConfig,
               );
               updateStateSnapshot(sessionId, {
                 activeGate: undefined,
