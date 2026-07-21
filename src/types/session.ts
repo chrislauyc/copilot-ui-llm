@@ -23,6 +23,15 @@ export interface StateSnapshot {
   readonly failedGateFeedback?: string;
   readonly totalRetries?: number;
   readonly currentModelIndex?: number;
+  /**
+   * Issue 79 / RM-REQ-031: monotonically increasing counter used for
+   * deterministic round-robin selection from DEFAULT_ROLES_CONFIG.auditorPool.
+   * Persisted per session so rotation continues to advance across
+   * gate/verification attempts within the same task session, rather than
+   * resetting (which would defeat the point of rotating). Defaults to 0
+   * when absent (first audit attempt of a fresh session).
+   */
+  readonly auditorRotationIndex?: number;
 }
 
 export interface CopilotEventPayload {

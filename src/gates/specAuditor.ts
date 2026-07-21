@@ -1,4 +1,5 @@
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
+import { ExecutionConfig } from '../utils/providerRegistry';
 import { submitSpecAuditTool } from '../config/tools';
 import { getGitSandbox, getExecCommand } from '../workspace';
 
@@ -8,9 +9,19 @@ interface SpecAuditResult {
   readonly violation_type?: string;
 }
 
-export async function runSpecAudit(cwd: string, abortSignal?: AbortSignal): Promise<{ pass: boolean; feedback: string }> {
+/**
+ * `executionConfigOverride` lets callers supply a pre-resolved
+ * ExecutionConfig (e.g. from the Issue 79 auditor rotation pool) instead of
+ * the single-tier default -- when omitted, behavior is unchanged from
+ * before the rotation pool existed.
+ */
+export async function runSpecAudit(
+  cwd: string,
+  abortSignal?: AbortSignal,
+  executionConfigOverride?: ExecutionConfig,
+): Promise<{ pass: boolean; feedback: string }> {
   const targetCwd = cwd;
-  const executionConfig = getAuditorExecutionConfig();
+  const executionConfig = executionConfigOverride ?? getAuditorExecutionConfig();
   try {
     console.log('[runSpecAudit] Start git diff async...');
     // 1. Get git diff against active container sandbox worktree

@@ -9,6 +9,7 @@ import { getWorkspaceHostLocation, getExecCommand, getWorkspaceRoot } from '../w
 import { checkPathInside } from '../security/pathGuard';
 import { saveSession, deleteSession, getSession } from '../db/sessionStore';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
+import { ExecutionConfig } from '../utils/providerRegistry';
 import { submitAuditFindingsTool } from '../config/tools';
 
 export interface CopilotCreateSessionOptions extends Omit<SessionConfig, 'provider'> {
@@ -411,8 +412,20 @@ export async function getCodeState(dir: string): Promise<string> {
   }
 }
 
-export async function runLlmAudit(promptStr: string, codeStateSummary: string, apiKey?: string, abortSignal?: AbortSignal): Promise<AuditResult> {
-  const executionConfig = getAuditorExecutionConfig(apiKey);
+/**
+ * `executionConfigOverride` lets callers supply a pre-resolved
+ * ExecutionConfig (e.g. from the Issue 79 auditor rotation pool) instead of
+ * the single-tier default -- when omitted, behavior is unchanged from
+ * before the rotation pool existed.
+ */
+export async function runLlmAudit(
+  promptStr: string,
+  codeStateSummary: string,
+  apiKey?: string,
+  abortSignal?: AbortSignal,
+  executionConfigOverride?: ExecutionConfig,
+): Promise<AuditResult> {
+  const executionConfig = executionConfigOverride ?? getAuditorExecutionConfig(apiKey);
   const systemPrompt = `You are an expert security auditor and code reviewer operating as an isolated quality assurance suite. Analyze the provided codebase and audit it for vulnerabilities, validation gate status, and functional readiness relative to the requirements.
 You MUST submit structured verification feedback, logic checks, and compiler gate status using the 'submit_audit_findings' tool immediately. Do NOT reply with standard conversational text; you MUST call the 'submit_audit_findings' tool.`;
 
