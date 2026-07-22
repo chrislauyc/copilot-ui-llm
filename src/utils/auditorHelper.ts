@@ -15,6 +15,19 @@ import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig } from '../config/models';
  * anymore; the auditor sessions still call bash/view/edit/grep/glob while
  * exploring a diff, so that guidance needs to be included explicitly here
  * instead.
+ *
+ * This is a hand-maintained subset of the full base CLI system prompt --
+ * not everything the CLI documents applies to an auditor session (no
+ * sub-agents, no report_intent tool, no SQL/todo tables), so only the
+ * bash/view/edit/grep/glob sections relevant to read-only diff exploration
+ * are carried over. Last synced against base system prompt v1.0.63.
+ *
+ * Note on <bash>: the full CLI prompt also documents sync/async run modes
+ * (initial_wait, read_bash/stop_bash, detach: true for long-lived
+ * processes). That's intentionally omitted here -- auditor sessions run a
+ * single forced-tool turn over a bounded diff and aren't expected to kick
+ * off builds, servers, or other long-running/background work. Revisit if
+ * that assumption changes (e.g. auditors start running test suites).
  */
 const TOOL_USAGE_BOILERPLATE = `# Tool usage efficiency
 CRITICAL: Maximize tool efficiency:
@@ -33,6 +46,7 @@ Refuse to execute commands that use shell expansion features to obfuscate or con
 </bash>
 <view>
 When reading multiple files or multiple sections of same file, call **view** multiple times in the same response -- they are processed in parallel.
+Files are truncated at 20KB. Use view_range for any file you expect to be large (e.g. a large diff or generated file) to avoid a wasted round-trip on truncated output.
 </view>
 <edit>
 You can batch edits to the same file in a single response. Edits are applied in sequential order, removing the risk of a reader/writer conflict.
