@@ -862,6 +862,13 @@ export const handleGateLoop = async (
       });
 
       let assistantMessage = "";
+      // Temporary diagnostic counter (issue #158): in-memory only, scoped to
+      // this request's event handler closure. Deliberately not persisted on
+      // SessionRecord/activeSessions -- this is throwaway diagnostic state,
+      // and persisting it would trigger a synchronous SQLite write via
+      // SessionMap.set() on every occurrence.
+      let usageTelemetryLogCount = 0;
+      const USAGE_TELEMETRY_LOG_LIMIT = 3;
       heartbeatId = setInterval(async () => {
         if (!res.writableEnded && !res.destroyed && !isRequestClosed) {
           try {
@@ -2088,6 +2095,28 @@ export const handleGateLoop = async (
                         assistantMessage += extEvent.data.content || "";
                       } else if (extEvent.type === "assistant.message_delta") {
                         assistantMessage += extEvent.data.deltaContent || "";
+                      }
+
+                      // Temporary diagnostic logging (issue #158): observe
+                      // whether assistant.usage / session.usage_info events
+                      // are populated the same way for OpenRouter-routed
+                      // sessions as they are for Copilot-native ones. Capped
+                      // to the first few occurrences per request (this
+                      // counter is re-initialized per invocation of this
+                      // closure, not persisted across requests on the same
+                      // session) so a single request doesn't spam logs.
+                      if (
+                        (extEvent.type === "assistant.usage" ||
+                          extEvent.type === "session.usage_info") &&
+                        usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
+                      ) {
+                        usageTelemetryLogCount++;
+                        const usageProviderType =
+                          registryInstance.getExecutionConfig(currentModel)
+                            .providerType;
+                        writeLog(
+                          `[UsageTelemetry] provider=${usageProviderType} model=${currentModel} ${JSON.stringify((extEvent as { data?: unknown }).data)}`,
+                        );
                       }
 
                       // Step 2: Emit all SDK events to client
