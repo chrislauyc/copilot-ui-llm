@@ -10,6 +10,7 @@ import { checkPathInside } from '../security/pathGuard';
 import { saveSession, deleteSession, getSession } from '../db/sessionStore';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
 import { submitAuditFindingsTool } from '../config/tools';
+import { enforceWorkingMemoryTruncation } from '../utils/contextManager';
 
 export interface CopilotCreateSessionOptions extends Omit<SessionConfig, 'provider'> {
   provider?: SdkProviderConfig;
@@ -127,6 +128,74 @@ export const DIAGNOSTIC_SCENARIOS: Record<string, { gateSequence: boolean[], exe
   }
 };
 
+/**
+ * Folds retained `SessionRecord.conversationHistory` bookkeeping into the
+ * config passed to `client.createSession`, so a recreated session doesn't
+ * silently start with empty context at the SDK/model level (see #155).
+ *
+ * `createSession`/`resumeSession` have no `conversationHistory` field to
+ * populate directly -- resume avoids the problem entirely by continuing the
+ * SDK's own server-side history, but a genuine `createSession` fallback has
+ * no such continuity. The only config surface that reaches the model before
+ * the first turn is `systemMessage`, so the retained history is serialized
+ * into it there, mirroring the same "[Conversation History]" formatting
+ * already used ad hoc by `formatContextNarrowingPrompt`/`formatEscalationPrompt`
+ * for individual prompt strings.
+ *
+ * A no-op (returns `options` unchanged) when there's no history to carry
+ * forward, so callers with a brand-new session never pay for this.
+ */
+export function withRetainedHistory(
+  options: CopilotCreateSessionOptions,
+  history: SessionRecord['conversationHistory']
+): CopilotCreateSessionOptions {
+  if (!history || history.length === 0) {
+    return options;
+  }
+
+  // conversationHistory grows unboundedly during an active session (bounded
+  // only loosely by a length>50 slice(-20) elsewhere), so apply the same
+  // 40k-char working-memory truncation every other history-to-model path
+  // uses (pruneConversationHistory in gateLoop.ts/serverRuntime.ts) before
+  // folding it into the system message. Otherwise a long-running session's
+  // full unpruned history could land here on recreate and risk context
+  // overflow / createSession failure.
+  const truncatedHistory = enforceWorkingMemoryTruncation(history);
+  if (truncatedHistory.length === 0) {
+    return options;
+  }
+
+  const historyBlock = `\n\n[Retained Conversation History]\n${truncatedHistory
+    .map(h => `${h.role}: ${h.content}`)
+    .join('\n')}`;
+
+  const existingSystemMessage = options.systemMessage;
+
+  if (existingSystemMessage?.mode === 'replace') {
+    // Replace mode hands the model the caller's system message verbatim with
+    // no SDK-managed sections to fall back on -- appending here is the only
+    // way to still surface the retained history to a recreated session.
+    return {
+      ...options,
+      systemMessage: {
+        ...existingSystemMessage,
+        content: `${existingSystemMessage.content}${historyBlock}`,
+      },
+    };
+  }
+
+  // Append mode (the default when systemMessage is omitted) and customize
+  // mode both expose a plain `content` string that is added on top of the
+  // SDK-managed prompt, so the history block can simply be appended there.
+  return {
+    ...options,
+    systemMessage: {
+      ...existingSystemMessage,
+      content: `${existingSystemMessage?.content ?? ''}${historyBlock}`,
+    },
+  };
+}
+
 export async function getOrCreateSession(
   sessionId: string,
   currentModel: string,
@@ -216,10 +285,18 @@ export async function getOrCreateSession(
           newSession = await client.resumeSession(realSessionId, createSessionOptions);
         } catch (err) {
           writeLog(`[Session] resumeSession(${realSessionId}) failed, falling back to createSession: ${err}`, LogLevel.WARN);
-          newSession = await client.createSession(createSessionOptions);
+          // resumeSession would have carried the SDK's own server-side
+          // history forward; that continuity is lost the moment we fall
+          // back to createSession, so the retained bookkeeping history must
+          // be folded into the new session's config explicitly (see #155).
+          newSession = await client.createSession(withRetainedHistory(createSessionOptions, existing.conversationHistory));
         }
       } else {
-        newSession = await client.createSession(createSessionOptions);
+        // A cwd/model change (or no realSessionId to resume) means this is
+        // always a brand-new SDK session with no server-side history of its
+        // own -- fold the retained bookkeeping history into its config so it
+        // isn't silently dropped (see #155).
+        newSession = await client.createSession(withRetainedHistory(createSessionOptions, existing.conversationHistory));
       }
       const updated: SessionRecord = {
         sessionId,
