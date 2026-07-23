@@ -164,8 +164,19 @@ export async function getOrCreateSession(
   const safeModelTier = (MODEL_TIERS.includes(currentModel) ? currentModel : MODEL_TIERS[0]) || 'gemini-3.1-flash-lite';
 
   if (existing) {
-    if (existing.currentModel !== currentModel || existing.cwd !== cwd || !existing.copilotSession) {
-      writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. Recreating session context.`);
+    const modelOrCwdChanged = existing.currentModel !== currentModel || existing.cwd !== cwd;
+    if (modelOrCwdChanged || !existing.copilotSession) {
+      writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. ${modelOrCwdChanged ? 'Recreating' : 'Resuming'} session context.`);
+      // The real server-side Copilot session ID (a random UUID the SDK
+      // assigns) is NOT the same as `sessionId`, which is only the
+      // client-side activeSessions Map key. It's captured from the live
+      // CopilotSession object whenever we have one, but it's also
+      // persisted to the DB (SessionRecord.copilotSessionId) precisely so
+      // it survives a disconnect or a rehydrate-from-DB (where
+      // copilotSession is null, see line ~148) -- otherwise the resume
+      // path below would be unreachable for exactly the cases it exists
+      // to handle.
+      const realSessionId = existing.copilotSession?.sessionId || existing.copilotSessionId;
       try {
         existing.unsubscribe?.();
         if (existing.copilotSession) {
@@ -174,10 +185,46 @@ export async function getOrCreateSession(
       } catch (err) {
         writeLog(`[Session] Error disconnecting outdated session ${sessionId}: ${err}`);
       }
-      const newSession = await client.createSession(createSessionOptions);
+      // Only resume when the model/cwd are unchanged and we merely lost the
+      // live session object (e.g. after an UpstreamStreamStall retry, or a
+      // session rehydrated mid-flight) -- that's the actual stall/reconnect
+      // scenario this fixes (see #154): it was misdiagnosed as a
+      // provider-side hang and "fixed" by discarding the live session and
+      // its conversation/prompt state, when the real cause was a
+      // ~10-minute server-side idle timeout that resumeSession recovers
+      // from cleanly.
+      //
+      // A cwd change MUST still get a brand-new session via createSession,
+      // not resumeSession -- this isn't just a preference. The SDK's
+      // ResumeSessionConfig type has no workingDirectory field at all (only
+      // SessionConfig, used at creation, does): a session's working
+      // directory is fixed at creation time and cannot be changed on
+      // resume. Resuming across a cwd change would silently keep running
+      // tool calls against the session's *original* directory while our
+      // own SessionRecord.cwd bookkeeping claimed it had moved -- a real
+      // cross-workspace mismatch, not just a cosmetic one. A model-tier
+      // escalation is also treated as a fresh-session case for the same
+      // "deliberate context change, not a reconnect" reason, even though
+      // model itself isn't structurally blocked on resume the way cwd is.
+      //
+      // Only fall back to createSession if resuming genuinely fails (e.g.
+      // the underlying SDK session is truly unrecoverable) -- fail loud via
+      // logging rather than silently masking a real dead-session case.
+      let newSession: CopilotSession;
+      if (!modelOrCwdChanged && realSessionId) {
+        try {
+          newSession = await client.resumeSession(realSessionId, createSessionOptions);
+        } catch (err) {
+          writeLog(`[Session] resumeSession(${realSessionId}) failed, falling back to createSession: ${err}`, LogLevel.WARN);
+          newSession = await client.createSession(createSessionOptions);
+        }
+      } else {
+        newSession = await client.createSession(createSessionOptions);
+      }
       const updated: SessionRecord = {
         sessionId,
         copilotSession: newSession,
+        copilotSessionId: newSession.sessionId,
         currentModel: safeModelTier,
         cwd,
         lastUsedAt: now,
@@ -210,6 +257,7 @@ export async function getOrCreateSession(
   const record: SessionRecord = {
     sessionId,
     copilotSession: newSession,
+    copilotSessionId: newSession.sessionId,
     currentModel: safeModelTier,
     cwd,
     lastUsedAt: now,
