@@ -85,6 +85,13 @@ describe('Specs and Tasks Database & Decomposition layer', () => {
   });
 
   it('should decompose a markdown specification into first-class tasks', async () => {
+    // NOTE: this exercises decomposeSpecIntoTasks, which shells out to a real
+    // `git` process via GitSandbox.getHeadShaAsync() to resolve the HEAD sha.
+    // Vitest runs test files concurrently within the shared single-threaded
+    // pool (see vite.config.ts), so this subprocess can occasionally be slow
+    // to schedule/complete under load (e.g. contention on the repo's
+    // .git/index.lock from other suites), which was intermittently exceeding
+    // the default 5s test timeout. Widen it here rather than globally.
     const specContent = `# System Spec v1.0
 We need to build a modular calculator app with clean UI and complete test cases.
 
@@ -136,7 +143,7 @@ Validate standard math rules and error scenarios under Vitest.`;
     expect(pbis.length).toBeGreaterThanOrEqual(1);
     expect(pbis[0]?.pbiId).toBe(`${spec.specId}-pbi-default`);
     expect(pbis[0]?.title).toBe('Default PBI');
-  });
+  }, 20000);
 
   it('should persist task status across re-decompositions', async () => {
     const specContent = `# Spec
