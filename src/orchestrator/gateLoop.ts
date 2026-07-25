@@ -2053,9 +2053,28 @@ export const handleGateLoop = async (
                   stallTimer = null;
                 }
               };
+              // Temporary diagnostic logging: help distinguish a genuine
+              // upstream stall from a false positive (e.g. the watchdog
+              // firing while an SDK event was in flight, or lastEventAt
+              // not being updated promptly). Logs the watchdog lifecycle
+              // and each tick's elapsed-since-last-event so a suspected
+              // false positive can be reconstructed from the logs.
+              writeLog(
+                `[StallWatchdog] Starting. model=${currentModel} timeoutMs=${STALL_TIMEOUT_MS} startedAt=${lastEventAt}`,
+                LogLevel.DEBUG,
+              );
               const stallPromise = new Promise<never>((_, reject) => {
                 stallTimer = setInterval(() => {
-                  if (Date.now() - lastEventAt > STALL_TIMEOUT_MS) {
+                  const elapsed = Date.now() - lastEventAt;
+                  writeLog(
+                    `[StallWatchdog] Tick. model=${currentModel} elapsedMs=${elapsed} thresholdMs=${STALL_TIMEOUT_MS}`,
+                    LogLevel.DEBUG,
+                  );
+                  if (elapsed > STALL_TIMEOUT_MS) {
+                    writeLog(
+                      `[StallWatchdog] Threshold exceeded. model=${currentModel} elapsedMs=${elapsed} lastEventAt=${lastEventAt} now=${Date.now()}. Rejecting as stall.`,
+                      LogLevel.WARN,
+                    );
                     clearStallWatchdog();
                     const stallErr = new Error(
                       `Upstream stream stalled: no SDK event received for over ${STALL_TIMEOUT_MS / 1000}s (model=${currentModel}).`,
@@ -2078,7 +2097,12 @@ export const handleGateLoop = async (
                 abortController.signal.addEventListener("abort", onAbort);
 
                 unsubscribe = activeSession.on((event: SessionEvent) => {
-                  lastEventAt = Date.now();
+                  const now = Date.now();
+                  writeLog(
+                    `[StallWatchdog] SDK event received. model=${currentModel} type=${event.type} sinceLastEventMs=${now - lastEventAt}`,
+                    LogLevel.DEBUG,
+                  );
+                  lastEventAt = now;
                   eventChain = eventChain.then(async () => {
                     const extEvent = event as ExtendedSessionEvent;
                     if (sessionId && activeSessions.has(sessionId)) {
@@ -2387,6 +2411,10 @@ export const handleGateLoop = async (
 
                 break;
               } finally {
+                writeLog(
+                  `[StallWatchdog] Clearing. model=${currentModel} lastEventAt=${lastEventAt} now=${Date.now()}`,
+                  LogLevel.DEBUG,
+                );
                 clearStallWatchdog();
               }
 
