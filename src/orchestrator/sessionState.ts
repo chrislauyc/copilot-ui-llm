@@ -11,6 +11,7 @@ import { saveSession, deleteSession, getSession } from '../db/sessionStore';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
 import { ExecutionConfig } from '../utils/providerRegistry';
 import { submitAuditFindingsTool } from '../config/tools';
+import { enforceWorkingMemoryTruncation } from '../utils/contextManager';
 
 export interface CopilotCreateSessionOptions extends Omit<SessionConfig, 'provider'> {
   provider?: SdkProviderConfig;
@@ -128,6 +129,74 @@ export const DIAGNOSTIC_SCENARIOS: Record<string, { gateSequence: boolean[], exe
   }
 };
 
+/**
+ * Folds retained `SessionRecord.conversationHistory` bookkeeping into the
+ * config passed to `client.createSession`, so a recreated session doesn't
+ * silently start with empty context at the SDK/model level (see #155).
+ *
+ * `createSession`/`resumeSession` have no `conversationHistory` field to
+ * populate directly -- resume avoids the problem entirely by continuing the
+ * SDK's own server-side history, but a genuine `createSession` fallback has
+ * no such continuity. The only config surface that reaches the model before
+ * the first turn is `systemMessage`, so the retained history is serialized
+ * into it there, mirroring the same "[Conversation History]" formatting
+ * already used ad hoc by `formatContextNarrowingPrompt`/`formatEscalationPrompt`
+ * for individual prompt strings.
+ *
+ * A no-op (returns `options` unchanged) when there's no history to carry
+ * forward, so callers with a brand-new session never pay for this.
+ */
+export function withRetainedHistory(
+  options: CopilotCreateSessionOptions,
+  history: SessionRecord['conversationHistory']
+): CopilotCreateSessionOptions {
+  if (!history || history.length === 0) {
+    return options;
+  }
+
+  // conversationHistory grows unboundedly during an active session (bounded
+  // only loosely by a length>50 slice(-20) elsewhere), so apply the same
+  // 40k-char working-memory truncation every other history-to-model path
+  // uses (pruneConversationHistory in gateLoop.ts/serverRuntime.ts) before
+  // folding it into the system message. Otherwise a long-running session's
+  // full unpruned history could land here on recreate and risk context
+  // overflow / createSession failure.
+  const truncatedHistory = enforceWorkingMemoryTruncation(history);
+  if (truncatedHistory.length === 0) {
+    return options;
+  }
+
+  const historyBlock = `\n\n[Retained Conversation History]\n${truncatedHistory
+    .map(h => `${h.role}: ${h.content}`)
+    .join('\n')}`;
+
+  const existingSystemMessage = options.systemMessage;
+
+  if (existingSystemMessage?.mode === 'replace') {
+    // Replace mode hands the model the caller's system message verbatim with
+    // no SDK-managed sections to fall back on -- appending here is the only
+    // way to still surface the retained history to a recreated session.
+    return {
+      ...options,
+      systemMessage: {
+        ...existingSystemMessage,
+        content: `${existingSystemMessage.content}${historyBlock}`,
+      },
+    };
+  }
+
+  // Append mode (the default when systemMessage is omitted) and customize
+  // mode both expose a plain `content` string that is added on top of the
+  // SDK-managed prompt, so the history block can simply be appended there.
+  return {
+    ...options,
+    systemMessage: {
+      ...existingSystemMessage,
+      content: `${existingSystemMessage?.content ?? ''}${historyBlock}`,
+    },
+  };
+}
+
 export async function getOrCreateSession(
   sessionId: string,
   currentModel: string,
@@ -165,8 +234,19 @@ export async function getOrCreateSession(
   const safeModelTier = (MODEL_TIERS.includes(currentModel) ? currentModel : MODEL_TIERS[0]) || 'gemini-3.1-flash-lite';
 
   if (existing) {
-    if (existing.currentModel !== currentModel || existing.cwd !== cwd || !existing.copilotSession) {
-      writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. Recreating session context.`);
+    const modelOrCwdChanged = existing.currentModel !== currentModel || existing.cwd !== cwd;
+    if (modelOrCwdChanged || !existing.copilotSession) {
+      writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. ${modelOrCwdChanged ? 'Recreating' : 'Resuming'} session context.`);
+      // The real server-side Copilot session ID (a random UUID the SDK
+      // assigns) is NOT the same as `sessionId`, which is only the
+      // client-side activeSessions Map key. It's captured from the live
+      // CopilotSession object whenever we have one, but it's also
+      // persisted to the DB (SessionRecord.copilotSessionId) precisely so
+      // it survives a disconnect or a rehydrate-from-DB (where
+      // copilotSession is null, see line ~148) -- otherwise the resume
+      // path below would be unreachable for exactly the cases it exists
+      // to handle.
+      const realSessionId = existing.copilotSession?.sessionId || existing.copilotSessionId;
       try {
         existing.unsubscribe?.();
         if (existing.copilotSession) {
@@ -175,10 +255,54 @@ export async function getOrCreateSession(
       } catch (err) {
         writeLog(`[Session] Error disconnecting outdated session ${sessionId}: ${err}`);
       }
-      const newSession = await client.createSession(createSessionOptions);
+      // Only resume when the model/cwd are unchanged and we merely lost the
+      // live session object (e.g. after an UpstreamStreamStall retry, or a
+      // session rehydrated mid-flight) -- that's the actual stall/reconnect
+      // scenario this fixes (see #154): it was misdiagnosed as a
+      // provider-side hang and "fixed" by discarding the live session and
+      // its conversation/prompt state, when the real cause was a
+      // ~10-minute server-side idle timeout that resumeSession recovers
+      // from cleanly.
+      //
+      // A cwd change MUST still get a brand-new session via createSession,
+      // not resumeSession -- this isn't just a preference. The SDK's
+      // ResumeSessionConfig type has no workingDirectory field at all (only
+      // SessionConfig, used at creation, does): a session's working
+      // directory is fixed at creation time and cannot be changed on
+      // resume. Resuming across a cwd change would silently keep running
+      // tool calls against the session's *original* directory while our
+      // own SessionRecord.cwd bookkeeping claimed it had moved -- a real
+      // cross-workspace mismatch, not just a cosmetic one. A model-tier
+      // escalation is also treated as a fresh-session case for the same
+      // "deliberate context change, not a reconnect" reason, even though
+      // model itself isn't structurally blocked on resume the way cwd is.
+      //
+      // Only fall back to createSession if resuming genuinely fails (e.g.
+      // the underlying SDK session is truly unrecoverable) -- fail loud via
+      // logging rather than silently masking a real dead-session case.
+      let newSession: CopilotSession;
+      if (!modelOrCwdChanged && realSessionId) {
+        try {
+          newSession = await client.resumeSession(realSessionId, createSessionOptions);
+        } catch (err) {
+          writeLog(`[Session] resumeSession(${realSessionId}) failed, falling back to createSession: ${err}`, LogLevel.WARN);
+          // resumeSession would have carried the SDK's own server-side
+          // history forward; that continuity is lost the moment we fall
+          // back to createSession, so the retained bookkeeping history must
+          // be folded into the new session's config explicitly (see #155).
+          newSession = await client.createSession(withRetainedHistory(createSessionOptions, existing.conversationHistory));
+        }
+      } else {
+        // A cwd/model change (or no realSessionId to resume) means this is
+        // always a brand-new SDK session with no server-side history of its
+        // own -- fold the retained bookkeeping history into its config so it
+        // isn't silently dropped (see #155).
+        newSession = await client.createSession(withRetainedHistory(createSessionOptions, existing.conversationHistory));
+      }
       const updated: SessionRecord = {
         sessionId,
         copilotSession: newSession,
+        copilotSessionId: newSession.sessionId,
         currentModel: safeModelTier,
         cwd,
         lastUsedAt: now,
@@ -211,6 +335,7 @@ export async function getOrCreateSession(
   const record: SessionRecord = {
     sessionId,
     copilotSession: newSession,
+    copilotSessionId: newSession.sessionId,
     currentModel: safeModelTier,
     cwd,
     lastUsedAt: now,
