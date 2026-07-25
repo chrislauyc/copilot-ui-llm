@@ -95,15 +95,30 @@ export async function sendAndWaitWithAbort(
   abortSignal?: AbortSignal,
 ): Promise<void> {
   let lastEventAt = Date.now();
-  const unsubscribeStallTracker = session.on(() => {
-    lastEventAt = Date.now();
+  console.log(
+    `[sendAndWaitWithAbort] stall watchdog starting. timeoutMs=${STALL_TIMEOUT_MS} startedAt=${lastEventAt}`,
+  );
+  const unsubscribeStallTracker = session.on((event: unknown) => {
+    const now = Date.now();
+    const evType = event && typeof event === 'object' ? (event as Record<string, unknown>).type : undefined;
+    console.log(
+      `[sendAndWaitWithAbort] SDK event received. type=${String(evType)} sinceLastEventMs=${now - lastEventAt}`,
+    );
+    lastEventAt = now;
   });
 
   let stallTimer: ReturnType<typeof setInterval> | null = null;
   const stallPromise = new Promise<never>((_, reject) => {
     stallTimer = setInterval(() => {
-      if (Date.now() - lastEventAt > STALL_TIMEOUT_MS) {
+      const elapsed = Date.now() - lastEventAt;
+      console.log(
+        `[sendAndWaitWithAbort] stall watchdog tick. elapsedMs=${elapsed} thresholdMs=${STALL_TIMEOUT_MS}`,
+      );
+      if (elapsed > STALL_TIMEOUT_MS) {
         if (stallTimer) clearInterval(stallTimer);
+        console.warn(
+          `[sendAndWaitWithAbort] stall threshold exceeded. elapsedMs=${elapsed} lastEventAt=${lastEventAt} now=${Date.now()}. Rejecting as stall.`,
+        );
         const err = new Error(
           `Upstream stream stalled: no SDK event received for over ${STALL_TIMEOUT_MS / 1000}s.`,
         ) as StallError;
@@ -132,7 +147,11 @@ export async function sendAndWaitWithAbort(
 
   try {
     await Promise.race(racers);
+    console.log('[sendAndWaitWithAbort] resolved without stalling.');
   } finally {
+    console.log(
+      `[sendAndWaitWithAbort] stall watchdog clearing. lastEventAt=${lastEventAt} now=${Date.now()}`,
+    );
     if (stallTimer) clearInterval(stallTimer);
     unsubscribeStallTracker();
   }
