@@ -446,7 +446,7 @@ export const activeBackgroundRuns = new Map<
  * (Issue 81 / RM-REQ-021) -- that operation calls getAuditorExecutionConfig
  * with a tierIndex directly and never goes through this rotation pool.
  */
-function selectAndAdvanceAuditorRotation(
+export function selectAndAdvanceAuditorRotation(
   sessionId: string | undefined,
   implementorModel: string | undefined,
   apiKey: string | undefined,
