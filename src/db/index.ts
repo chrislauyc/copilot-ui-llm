@@ -27,7 +27,7 @@ db.exec(`
     specId TEXT REFERENCES specs(specId),
     title TEXT NOT NULL,
     description TEXT,
-    status TEXT CHECK(status IN ('pending','in_progress','blocked','done')) DEFAULT 'pending',
+    status TEXT CHECK(status IN ('pending','in_progress','blocked','pr_ready','done')) DEFAULT 'pending',
     dependsOn TEXT,              -- JSON array of pbiIds
     createdAt INTEGER,
     updatedAt INTEGER,
@@ -88,6 +88,9 @@ db.exec(`
 const sessionsColumns = db.pragma('table_info(sessions)') as { name: string }[];
 if (!sessionsColumns.some(col => col.name === 'taskId')) {
   db.prepare('ALTER TABLE sessions ADD COLUMN taskId TEXT').run();
+}
+if (!sessionsColumns.some(col => col.name === 'copilotSessionId')) {
+  db.prepare('ALTER TABLE sessions ADD COLUMN copilotSessionId TEXT').run();
 }
 
 const tasksColumns = db.pragma('table_info(tasks)') as { name: string }[];
