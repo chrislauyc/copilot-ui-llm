@@ -173,7 +173,7 @@ export function selectRotatingAuditorConfig(rotationIndex: number, apiKey?: stri
     throw new Error('Auditor pool is empty');
   }
   const normalizedIndex = ((rotationIndex % pool.length) + pool.length) % pool.length;
-  const auditorConfig = selectFromAuditorPool(rotationIndex);
+  const auditorConfig = selectFromAuditorPool(normalizedIndex);
   const executionConfig = resolveExecutionConfig(auditorConfig, 'auditor pool', apiKey);
 
   return {
