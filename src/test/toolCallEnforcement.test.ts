@@ -370,15 +370,18 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
   describe('sendAndWaitWithAbort diagnostic logging (Issue #180)', () => {
     let logSpy: ReturnType<typeof vi.spyOn>;
     let warnSpy: ReturnType<typeof vi.spyOn>;
+    let errorSpy: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {
       logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     });
 
     afterEach(() => {
       logSpy.mockRestore();
       warnSpy.mockRestore();
+      errorSpy.mockRestore();
     });
 
     it('logs each tool.execution_start event with the tool name', async () => {
@@ -449,6 +452,54 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       const stallWarnCall = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes('stall detected'));
       expect(stallWarnCall).toBeDefined();
       expect(String(stallWarnCall![0])).toContain('lastEventType=assistant.reasoning_delta');
+    });
+
+    it('fails loudly (console.error) instead of silently logging "undefined" when tool.execution_start has no toolName', async () => {
+      let eventHandler: (e: unknown) => void = () => {};
+      const session = {
+        sessionId: 's-malformed-tool-event',
+        on: vi.fn().mockImplementation((handler) => {
+          eventHandler = handler;
+          return vi.fn();
+        }),
+        sendAndWait: vi.fn().mockImplementation(() => {
+          // Malformed: missing toolName entirely, and empty-string toolName.
+          eventHandler({ type: 'tool.execution_start', data: {} });
+          eventHandler({ type: 'tool.execution_start', data: { toolName: '' } });
+          return Promise.resolve();
+        }),
+      } as any;
+
+      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+
+      // Never silently logs "tool used: undefined" or "tool used: ".
+      expect(logSpy.mock.calls.some((c: unknown[]) => String(c[0]).includes('tool used:'))).toBe(false);
+      // Instead, fails loudly at error level, twice (once per malformed event).
+      const shapeErrors = errorSpy.mock.calls.filter((c: unknown[]) => String(c[0]).includes('UNEXPECTED EVENT SHAPE'));
+      expect(shapeErrors).toHaveLength(2);
+      expect(String(shapeErrors[0][0])).toContain("tool.execution_start");
+    });
+
+    it('fails loudly (console.error) when a usage-telemetry event has no usable data object', async () => {
+      let eventHandler: (e: unknown) => void = () => {};
+      const session = {
+        sessionId: 's-malformed-usage-event',
+        on: vi.fn().mockImplementation((handler) => {
+          eventHandler = handler;
+          return vi.fn();
+        }),
+        sendAndWait: vi.fn().mockImplementation(() => {
+          eventHandler({ type: 'assistant.usage', data: null });
+          eventHandler({ type: 'session.usage_info' }); // data entirely absent
+          return Promise.resolve();
+        }),
+      } as any;
+
+      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+
+      expect(logSpy.mock.calls.some((c: unknown[]) => String(c[0]).includes('[UsageTelemetry]'))).toBe(false);
+      const shapeErrors = errorSpy.mock.calls.filter((c: unknown[]) => String(c[0]).includes('UNEXPECTED EVENT SHAPE'));
+      expect(shapeErrors).toHaveLength(2);
     });
 
     it('logs lastEventType=none if the stall happens before any event ever arrives', async () => {

@@ -112,8 +112,23 @@ export async function sendAndWaitWithAbort(
     // in logs even though the model may have run several investigative
     // tool calls beforehand.
     if (ev.type === 'tool.execution_start') {
-      const toolName = (ev.data as Record<string, unknown> | undefined)?.toolName;
-      console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+      const data = ev.data as Record<string, unknown> | undefined;
+      const toolName = data?.toolName;
+      // Per the SDK's ToolExecutionStartData type, `toolName` is a required
+      // string -- this is an assumption about the SDK's wire shape, not
+      // something we've validated ourselves. Rather than silently logging
+      // "tool used: undefined" if that assumption is ever wrong (SDK
+      // version change, malformed event, etc.), fail loudly so a broken
+      // assumption is visible instead of masquerading as a real tool name.
+      if (typeof toolName === 'string' && toolName.length > 0) {
+        console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+      } else {
+        console.error(
+          `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: 'tool.execution_start' event is missing a valid ` +
+          `string 'toolName' in its data (got: ${JSON.stringify(data)}). This violates an assumption about ` +
+          `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
+        );
+      }
     }
 
     // Important event: usage telemetry. This mirrors gateLoop.ts's own
@@ -126,7 +141,15 @@ export async function sendAndWaitWithAbort(
       usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
     ) {
       usageTelemetryLogCount++;
-      console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
+      if (ev.data && typeof ev.data === 'object') {
+        console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
+      } else {
+        console.error(
+          `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: '${ev.type}' event has no usable 'data' object ` +
+          `(got: ${JSON.stringify(ev.data)}). This violates an assumption about the SDK's event contract -- ` +
+          `investigate before trusting this event's downstream handling.`,
+        );
+      }
     }
   });
 
