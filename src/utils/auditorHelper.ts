@@ -273,11 +273,7 @@ export async function executeAuditSession<T>(
       executionConfig,
       systemPrompt,
       tool,
-      (args) => {
-        result = args as T;
-        // Important event: the auditor's target tool was actually called.
-        console.log(`[executeAuditSession] tool used: ${toolName} session=${sessionId ?? 'pending'}`);
-      }
+      (args) => { result = args as T; }
     );
 
     let session: CopilotSession;

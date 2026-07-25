@@ -105,6 +105,17 @@ export async function sendAndWaitWithAbort(
     const ev = event as Record<string, unknown>;
     lastEventType = String(ev.type);
 
+    // Important event: any tool the model actually invokes during the
+    // turn (view, glob, bash, etc.), not just the forced target tool that
+    // executeAuditSession's callback captures when the turn concludes.
+    // Without this, only the final structured-output tool call showed up
+    // in logs even though the model may have run several investigative
+    // tool calls beforehand.
+    if (ev.type === 'tool.execution_start') {
+      const toolName = (ev.data as Record<string, unknown> | undefined)?.toolName;
+      console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+    }
+
     // Important event: usage telemetry. This mirrors gateLoop.ts's own
     // usage-telemetry logging (issue #158), which never fires for auditor
     // sessions (PR review, spec audit, etc.) since they run through this
