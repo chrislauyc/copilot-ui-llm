@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, expect } from 'vitest';
+import { describe, it, beforeEach, afterEach, expect } from 'vitest';
 import { db } from '../db/index';
 import { saveSpec, getSpec, saveTask, getTask, getTasksForSpec } from '../db/taskStore';
 import { savePbi, getPbi, getPbisForSpec } from '../db/pbiStore';
@@ -6,11 +6,23 @@ import { decomposeSpecIntoTasks } from '../utils/taskManager';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspaceRoot } from '../workspace';
+import { __setGitSandboxForTests } from './vitest.setup';
 
 describe('Specs and Tasks Database & Decomposition layer', () => {
   const mockCwd = path.join(getWorkspaceRoot(), 'test-spec-tasks-dir');
 
   beforeEach(() => {
+    // decomposeSpecIntoTasks() calls GitSandbox.getHeadShaAsync(), which by
+    // default shells out to a real `git` process against this repo's shared
+    // .git directory. Under Vitest's concurrent test-file execution that
+    // process can contend with git operations from other suites (e.g.
+    // .git/index.lock), causing this test to intermittently time out. This
+    // suite doesn't care about a real SHA, so stub the sandbox instead of
+    // depending on a real, shared subprocess — deterministic and immune to
+    // cross-suite git contention.
+    __setGitSandboxForTests({
+      getHeadShaAsync: async () => 'stub-head-sha',
+    });
     db.prepare('DELETE FROM sessions').run();
     db.prepare('DELETE FROM tasks').run();
     db.prepare('DELETE FROM pbis').run();
@@ -18,6 +30,10 @@ describe('Specs and Tasks Database & Decomposition layer', () => {
     if (!fs.existsSync(mockCwd)) {
       fs.mkdirSync(mockCwd, { recursive: true });
     }
+  });
+
+  afterEach(() => {
+    __setGitSandboxForTests(null);
   });
 
   it('should save and get specs and tasks correctly', () => {
@@ -85,13 +101,6 @@ describe('Specs and Tasks Database & Decomposition layer', () => {
   });
 
   it('should decompose a markdown specification into first-class tasks', async () => {
-    // NOTE: this exercises decomposeSpecIntoTasks, which shells out to a real
-    // `git` process via GitSandbox.getHeadShaAsync() to resolve the HEAD sha.
-    // Vitest runs test files concurrently within the shared single-threaded
-    // pool (see vite.config.ts), so this subprocess can occasionally be slow
-    // to schedule/complete under load (e.g. contention on the repo's
-    // .git/index.lock from other suites), which was intermittently exceeding
-    // the default 5s test timeout. Widen it here rather than globally.
     const specContent = `# System Spec v1.0
 We need to build a modular calculator app with clean UI and complete test cases.
 
@@ -143,7 +152,7 @@ Validate standard math rules and error scenarios under Vitest.`;
     expect(pbis.length).toBeGreaterThanOrEqual(1);
     expect(pbis[0]?.pbiId).toBe(`${spec.specId}-pbi-default`);
     expect(pbis[0]?.title).toBe('Default PBI');
-  }, 20000);
+  });
 
   it('should persist task status across re-decompositions', async () => {
     const specContent = `# Spec
