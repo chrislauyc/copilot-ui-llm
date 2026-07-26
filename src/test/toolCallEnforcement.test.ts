@@ -189,7 +189,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
     });
 
-    it('creates a brand-new session (not resumeSession) on stall when freshSessionConfig is provided', async () => {
+    it('tries resumeSession before falling back to createSession on stall when freshSessionConfig is provided', async () => {
       let sessionCount = 0;
       const makeSession = (resolves: boolean) => {
         sessionCount++;
@@ -197,21 +197,23 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
           sessionId: `session-${sessionCount}`,
           on: vi.fn().mockReturnValue(vi.fn()),
           sendAndWait: vi.fn().mockImplementation(() => (resolves ? Promise.resolve() : new Promise(() => {}))),
+          disconnect: vi.fn().mockResolvedValue(undefined),
         };
       };
 
       const initialSession = makeSession(false); // stalls
+      const resumedSession = makeSession(false); // resume attempt itself stalls too
       const freshSessionConfig = { workingDirectory: '/tmp', systemPrompt: 'x', tools: [] } as any;
       const mockClient = {
         createSession: vi.fn().mockImplementation(async () => makeSession(true)), // succeeds
-        resumeSession: vi.fn(),
+        resumeSession: vi.fn().mockImplementation(async () => resumedSession),
       } as any;
       const onSessionId = vi.fn();
 
       const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', 'test prompt', {
         client: mockClient,
         maxRetries: 0,
-        maxStallRetries: 1,
+        maxStallRetries: 2,
         getResult: () => ({ ok: true }),
         tools: [],
         freshSessionConfig,
@@ -222,17 +224,145 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       // in this mock), but what we care about here is *how* the stall was
       // recovered from, not the final outcome.
       const assertion = expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
+      await vi.advanceTimersByTimeAsync((STALL_TIMEOUT_MS + 5000) * 2);
+      await assertion;
+
+      // First stall: try a cheap resume (preserves history) rather than
+      // immediately paying for a fresh session.
+      expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
+      expect(mockClient.resumeSession).toHaveBeenCalledWith('session-1', expect.anything());
+
+      // The resume attempt itself stalled -- only now do we treat the
+      // session as genuinely wedged and escalate to createSession.
+      expect(mockClient.createSession).toHaveBeenCalledTimes(1);
+      expect(mockClient.createSession).toHaveBeenCalledWith(freshSessionConfig);
+
+      // onSessionId must fire again with each new session's id, so callers
+      // that correlate outbound requests via a global (e.g.
+      // scripts/review-pr.ts's setActiveOpenRouterSessionId) stay in sync.
+      expect(onSessionId).toHaveBeenCalledWith('session-2'); // resumed session
+      expect(onSessionId).toHaveBeenCalledWith('session-3'); // fresh session
+
+      // Every abandoned session must be disconnected -- otherwise each
+      // stall retry leaks a live session/connection (issue #186).
+      expect(initialSession.disconnect).toHaveBeenCalledTimes(1);
+      expect(resumedSession.disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('goes straight to createSession (skips resume-first) when maxStallRetries is 1, so the freshSessionConfig fallback stays reachable', async () => {
+      let sessionCount = 0;
+      const makeSession = (resolves: boolean) => {
+        sessionCount++;
+        return {
+          sessionId: `session-${sessionCount}`,
+          on: vi.fn().mockReturnValue(vi.fn()),
+          sendAndWait: vi.fn().mockImplementation(() => (resolves ? Promise.resolve() : new Promise(() => {}))),
+          disconnect: vi.fn().mockResolvedValue(undefined),
+        };
+      };
+
+      const initialSession = makeSession(false); // stalls
+      const freshSessionConfig = { workingDirectory: '/tmp', systemPrompt: 'x', tools: [] } as any;
+      const mockClient = {
+        createSession: vi.fn().mockImplementation(async () => makeSession(true)), // succeeds
+        resumeSession: vi.fn(),
+      } as any;
+
+      const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', 'test prompt', {
+        client: mockClient,
+        maxRetries: 0,
+        maxStallRetries: 1,
+        getResult: () => ({ ok: true }),
+        tools: [],
+        freshSessionConfig,
+      });
+
+      const assertion = expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
       await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
       await assertion;
 
+      // With only one retry slot, resuming first would consume it and
+      // leave the createSession fallback unreachable -- so the sole
+      // attempt must go straight to createSession instead.
+      expect(mockClient.resumeSession).not.toHaveBeenCalled();
       expect(mockClient.createSession).toHaveBeenCalledTimes(1);
       expect(mockClient.createSession).toHaveBeenCalledWith(freshSessionConfig);
-      expect(mockClient.resumeSession).not.toHaveBeenCalled();
+    });
 
-      // onSessionId must fire again with the new session's id, so callers
-      // that correlate outbound requests via a global (e.g.
-      // scripts/review-pr.ts's setActiveOpenRouterSessionId) stay in sync.
-      expect(onSessionId).toHaveBeenCalledWith('session-2');
+    it('preserves the session via resumeSession on the first stall, avoiding history loss (issue #185/#192)', async () => {
+      let sessionCount = 0;
+      const sentPromptOpts: any[] = [];
+
+      const makeSession = (stalls: boolean) => {
+        sessionCount++;
+        const id = `session-${sessionCount}`;
+        const eventHandlers: Array<(event: unknown) => void> = [];
+        const emit = (event: unknown) => eventHandlers.forEach((h) => h(event));
+        return {
+          sessionId: id,
+          on: vi.fn().mockImplementation((handler: (e: unknown) => void) => {
+            eventHandlers.push(handler);
+            return vi.fn();
+          }),
+          sendAndWait: vi.fn().mockImplementation((opts: any) => {
+            sentPromptOpts.push(opts);
+            if (stalls) {
+              // Before the stall, the model already ran a couple of
+              // non-target investigative tool calls (e.g. `view`) --
+              // exactly the scenario from PR #136 where a stall late in
+              // a long investigation throws away everything done so far.
+              emit({ type: 'tool.execution_start', data: { toolName: 'view' } });
+              emit({ type: 'tool.execution_complete', data: { toolName: 'view' } });
+              emit({ type: 'tool.execution_start', data: { toolName: 'view' } });
+              emit({ type: 'tool.execution_complete', data: { toolName: 'view' } });
+              return new Promise(() => {}); // then the stream goes quiet forever
+            }
+            // Post-recovery session: the target tool fires immediately.
+            emit({ type: 'tool.execution_start', data: { toolName: 'my_tool' } });
+            emit({ type: 'tool.execution_complete', data: { toolName: 'my_tool' } });
+            return Promise.resolve();
+          }),
+          disconnect: vi.fn().mockResolvedValue(undefined),
+        };
+      };
+
+      const initialSession = makeSession(true);
+      const freshSessionConfig = { workingDirectory: '/tmp', systemPrompt: 'x', tools: [] } as any;
+      const mockClient = {
+        createSession: vi.fn().mockImplementation(async () => makeSession(false)),
+        resumeSession: vi.fn().mockImplementation(async () => makeSession(false)),
+      } as any;
+
+      const initialPrompt = 'Investigate this change and report your findings.';
+      const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', initialPrompt, {
+        client: mockClient,
+        maxRetries: 0,
+        maxStallRetries: 2,
+        getResult: () => ({ ok: true }),
+        tools: [],
+        freshSessionConfig,
+      });
+
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      const result = await runPromise;
+
+      // The retried session did pick up the target tool -- recovery
+      // "worked" in the sense that a result was eventually produced.
+      expect(result.toolCalled).toBe(true);
+
+      // On the *first* stall, recovery now tries resumeSession (preserving
+      // the model's prior investigative history via session continuity)
+      // instead of immediately paying for a history-losing createSession.
+      expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
+      expect(mockClient.resumeSession).toHaveBeenCalledWith(initialSession.sessionId, expect.anything());
+      expect(mockClient.createSession).not.toHaveBeenCalled();
+
+      // The in-flight prompt is retried as-is on the resumed session --
+      // resuming preserves conversation history, so there's no need to
+      // restart from scratch the way a fresh session would.
+      expect(sentPromptOpts).toHaveLength(2);
+      expect(sentPromptOpts[0]).toMatchObject({ prompt: initialPrompt });
+      expect(sentPromptOpts[1]).toEqual(sentPromptOpts[0]);
     });
 
     it('falls back to resumeSession when no freshSessionConfig is supplied', async () => {
@@ -243,6 +373,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
           sessionId: `session-${sessionCount}`,
           on: vi.fn().mockReturnValue(vi.fn()),
           sendAndWait: vi.fn().mockImplementation(() => (resolves ? Promise.resolve() : new Promise(() => {}))),
+          disconnect: vi.fn().mockResolvedValue(undefined),
         };
       };
 
@@ -267,9 +398,13 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
 
       expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
       expect(mockClient.createSession).not.toHaveBeenCalled();
+
+      // The abandoned (stalled) session must be disconnected -- otherwise
+      // each stall retry leaks a live session/connection (issue #186).
+      expect(initialSession.disconnect).toHaveBeenCalledTimes(1);
     });
 
-    it('restarts from the original prompt (not the in-flight nudge) when a stall happens mid-nudge-retry', async () => {
+    it('restarts from the original prompt (not the in-flight nudge) only once the resume-first attempt also stalls, mid-nudge-retry', async () => {
       let sessionCount = 0;
       const sentPrompts: string[] = [];
       const makeSession = (behavior: 'stall' | 'resolve') => {
@@ -282,6 +417,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
             sentPrompts.push(opts.prompt);
             return behavior === 'stall' ? new Promise(() => {}) : Promise.resolve();
           }),
+          disconnect: vi.fn().mockResolvedValue(undefined),
         };
       };
 
@@ -295,8 +431,10 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         createSession: vi.fn().mockImplementation(async () => makeSession('resolve')),
         resumeSession: vi.fn().mockImplementation(async () => {
           resumeCallCount++;
-          // The nudge-retry's own resumeSession() call returns a session
-          // whose *next* send (the nudge itself) stalls.
+          // The nudge-retry's own resumeSession() call, and the stall
+          // recovery's own resume-first attempt, both return a session
+          // whose next send stalls -- so the resume-first attempt fails
+          // too, and only then does recovery escalate to createSession.
           return makeSession('stall');
         }),
       } as any;
@@ -304,24 +442,27 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', 'test prompt', {
         client: mockClient,
         maxRetries: 1,
-        maxStallRetries: 1,
+        maxStallRetries: 2,
         getResult: () => ({ ok: true }),
         tools: [],
         freshSessionConfig,
       });
 
       const assertion = expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
-      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      await vi.advanceTimersByTimeAsync((STALL_TIMEOUT_MS + 5000) * 2);
       await assertion;
 
       expect(sentPrompts[0]).toBe('test prompt'); // initial turn
-      // The nudge-retry's resumeSession call happened once (the ordinary,
-      // non-stall nudge resume), and its send (the nudge itself) is what stalls...
-      expect(resumeCallCount).toBe(1);
+      // resumeCallCount 1: the nudge-retry's ordinary (non-stall) resume.
+      // Its send (the nudge itself) is what stalls...
       expect(sentPrompts[1]).toContain('ended your turn without calling');
-      // ...so recovery used createSession (not yet another resumeSession)
-      // and resent the *original* prompt, not another nudge.
-      expect(sentPrompts[2]).toBe('test prompt');
+      // ...so stall recovery tries resumeSession once more first (resumeCallCount 2),
+      // resending the same in-flight nudge rather than resetting to the original prompt...
+      expect(sentPrompts[2]).toBe(sentPrompts[1]);
+      expect(resumeCallCount).toBe(2);
+      // ...and only because *that* resume attempt also stalled does recovery
+      // fall back to createSession and resend the *original* prompt.
+      expect(sentPrompts[3]).toBe('test prompt');
       expect(mockClient.createSession).toHaveBeenCalledTimes(1);
     });
 

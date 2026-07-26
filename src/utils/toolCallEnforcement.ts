@@ -99,6 +99,15 @@ export async function sendAndWaitWithAbort(
   let lastEventAt = Date.now();
   let lastEventType: string | undefined;
   let usageTelemetryLogCount = 0;
+  // Tracks whether a tool is currently executing. `tool.execution_start` and
+  // `tool.execution_complete` are the only events bookending a tool call --
+  // nothing is emitted by the SDK *during* execution itself, so a
+  // slow-but-healthy tool (e.g. `npx tsc`, `vitest`, a large `grep`) that
+  // runs longer than STALL_TIMEOUT_MS would otherwise be misdiagnosed as a
+  // stalled upstream stream and have its turn killed and restarted mid-run
+  // (see issue #188/#191, reproduced on PR #136). While this is true, the
+  // watchdog below suspends its silence check entirely.
+  let toolExecutionActive = false;
   const unsubscribeStallTracker = session.on((event: unknown) => {
     lastEventAt = Date.now();
     if (!event || typeof event !== 'object' || !('type' in event)) return;
@@ -129,6 +138,11 @@ export async function sendAndWaitWithAbort(
           `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
         );
       }
+      toolExecutionActive = true;
+    }
+
+    if (ev.type === 'tool.execution_complete') {
+      toolExecutionActive = false;
     }
 
     // Important event: usage telemetry. This mirrors gateLoop.ts's own
@@ -156,6 +170,12 @@ export async function sendAndWaitWithAbort(
   let stallTimer: ReturnType<typeof setInterval> | null = null;
   const stallPromise = new Promise<never>((_, reject) => {
     stallTimer = setInterval(() => {
+      // A tool is actively running -- its own execution time is not
+      // "upstream silence" and must not count against the stall budget.
+      // The clock effectively resumes counting from whenever the tool
+      // finishes, since `tool.execution_complete` resets `lastEventAt`
+      // above.
+      if (toolExecutionActive) return;
       const elapsed = Date.now() - lastEventAt;
       if (elapsed > STALL_TIMEOUT_MS) {
         if (stallTimer) clearInterval(stallTimer);
@@ -317,6 +337,16 @@ export async function runForcedToolTurn<T>(
   ): Promise<void> => {
     let stallAttempt = 0;
     let currentPromptOpts = promptOpts;
+    // Tracks whether we've already tried resuming the stalled session once
+    // within the freshSessionConfig path. Per the design tradeoff in the
+    // freshSessionConfig doc comment, a resume risks re-sending into a
+    // wedged conversation -- but that risk is only real once we already
+    // know the session is wedged. On the *first* stall we don't yet know
+    // that, so we try a cheap resume (preserving history) before paying the
+    // cost of a fresh, history-losing session. Only if the resume attempt
+    // itself stalls do we treat the session as genuinely wedged and
+    // escalate to createSession.
+    let resumeAttempted = false;
     while (true) {
       try {
         await sendAndWaitWithAbort(currentSession, currentPromptOpts as MessageOptions, timeoutMs, opts.abortSignal);
@@ -345,15 +375,44 @@ export async function runForcedToolTurn<T>(
         unsubOnSession?.();
         tracker.unsubscribe();
         unsubTool();
+        // Disconnect the stalled session before discarding it -- otherwise
+        // each retry (via createSession or resumeSession) leaks a live
+        // session/connection that nothing ever cleans up.
+        try {
+          await currentSession.disconnect?.();
+        } catch(e) {
+          // Best-effort: don't let disconnect failures mask the retry.
+          console.warn(`[runForcedToolTurn] disconnect failed. ${e}`);
+        }
         if (opts.freshSessionConfig) {
-          console.warn(
-            `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
-            `starting a new session and retrying the original prompt...`,
-          );
-          currentSession = await opts.client.createSession(opts.freshSessionConfig);
-          currentSessionId = currentSession.sessionId;
-          opts.onSessionId?.(currentSessionId);
-          currentPromptOpts = { prompt: initialPrompt };
+          // Only try the resume-first path if there's still budget left
+          // afterward for the createSession fallback -- otherwise (e.g.
+          // maxStallRetries: 1) the resume would consume the sole retry
+          // slot and the fallback this caller opted into would never fire.
+          // In that case, go straight to createSession on the only attempt.
+          if (!resumeAttempted && stallAttempt < maxStallRetries) {
+            console.warn(
+              `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
+              `attempting to resume the stalled session before falling back to a fresh one...`,
+            );
+            currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig as SessionConfig);
+            currentSessionId = currentSession.sessionId;
+            opts.onSessionId?.(currentSessionId);
+            resumeAttempted = true;
+            // currentPromptOpts intentionally left as-is: resuming preserves
+            // history, so we retry the exact in-flight prompt rather than
+            // restarting from initialPrompt.
+          } else {
+            console.warn(
+              `[runForcedToolTurn] resume attempt itself stalled (attempt ${stallAttempt}/${maxStallRetries}); ` +
+              `starting a new session and retrying the original prompt...`,
+            );
+            currentSession = await opts.client.createSession(opts.freshSessionConfig);
+            currentSessionId = currentSession.sessionId;
+            opts.onSessionId?.(currentSessionId);
+            currentPromptOpts = { prompt: initialPrompt };
+            resumeAttempted = false;
+          }
         } else {
           console.warn(
             `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
