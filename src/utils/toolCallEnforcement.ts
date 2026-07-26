@@ -574,6 +574,27 @@ export async function runForcedToolTurnUntilTimeout<T>(
   const setupToolListener = (s: CopilotSession) => {
     const unsub = s.on((event: unknown) => {
       const ev = event as Record<string, unknown>;
+
+      // Same diagnostic logging as sendAndWaitWithAbort (issue #180): log
+      // every tool the model actually invokes during the turn, not just the
+      // forced target tool, and fail loudly if the SDK's tool.execution_start
+      // event doesn't have the expected string toolName -- otherwise a
+      // broken assumption about the SDK's event contract would silently
+      // masquerade as "tool used: undefined" instead of surfacing.
+      if (ev.type === 'tool.execution_start') {
+        const data = ev.data as Record<string, unknown> | undefined;
+        const toolName = data?.toolName;
+        if (typeof toolName === 'string' && toolName.length > 0) {
+          console.log(`[runForcedToolTurnUntilTimeout] tool used: ${toolName}`);
+        } else {
+          console.error(
+            `[runForcedToolTurnUntilTimeout] UNEXPECTED EVENT SHAPE: 'tool.execution_start' event is missing a valid ` +
+            `string 'toolName' in its data (got: ${JSON.stringify(data)}). This violates an assumption about ` +
+            `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
+          );
+        }
+      }
+
       if (
         (ev.type === 'tool.user_requested' && targetTools.includes((ev.data as any)?.toolName)) ||
         (ev.type === 'tool.execution_start' && targetTools.includes((ev.data as any)?.toolName)) ||
