@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime.ts';
 import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper.ts';
+import { FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from '../src/utils/toolCallEnforcement.ts';
 import { submitCodeReviewTool as baseSubmitCodeReviewTool } from '../src/config/tools.ts';
 import { getFilteredDiff } from './diffFilter';
 import {
@@ -274,7 +275,12 @@ async function main() {
         toolCallExample: SUBMIT_CODE_REVIEW_EXAMPLE,
       },
       undefined,
-      600000,
+      // Was a hardcoded 10min, sized around the old stall-watchdog's
+      // resume-and-continue recovery. `executeAuditSession` now uses
+      // runForcedToolTurnUntilTimeout, which has no such recovery, so this
+      // is a hard ceiling on the whole review turn -- use the same 60min
+      // headroom the function defaults to.
+      FORCED_TOOL_TURN_HARD_TIMEOUT_MS,
       (id) => {
         sessionId = id;
         setActiveOpenRouterSessionId(id);

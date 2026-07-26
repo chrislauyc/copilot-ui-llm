@@ -43,7 +43,7 @@ import {
   COMPOSER_ROUTER_TOOL,
   AMBIGUITY_CHECK_TOOL,
 } from "../config/tools";
-import { runForcedToolTurnUntilTimeout } from "../utils/toolCallEnforcement";
+import { runForcedToolTurnUntilTimeout, FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from "../utils/toolCallEnforcement";
 import {
   normalizeGates,
   TASK_TYPE_GATE_MAP,
@@ -2410,7 +2410,12 @@ export const handleGateLoop = async (
                       {
                         client,
                         abortSignal: abortController.signal,
-                        timeoutMs: 600000,
+                        // Was a hardcoded 10min, sized around the old
+                        // stall-watchdog's resume-and-continue recovery.
+                        // runForcedToolTurnUntilTimeout has no such recovery,
+                        // so this is now a hard ceiling -- use the function's
+                        // own 60min default instead of drifting again.
+                        timeoutMs: FORCED_TOOL_TURN_HARD_TIMEOUT_MS,
                         maxRetries: 1,
                         getResult: () => undefined,
                         tools: loopSessionOptions.tools,

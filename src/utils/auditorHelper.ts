@@ -1,4 +1,4 @@
-import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
+import { runForcedToolTurnUntilTimeout, FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig } from '../config/models';
@@ -256,7 +256,11 @@ export async function executeAuditSession<T>(
   userPrompt: string,
   responseRequirements: ResponseRequirement,
   abortSignal?: AbortSignal,
-  timeoutMs: number = 300000,
+  // Was 300000 (5min), sized around the old stall-watchdog's resume-and-continue
+  // recovery -- a turn could run well past this via resume. `runForcedToolTurnUntilTimeout`
+  // has no such recovery, so this is now a hard ceiling; default it to the same
+  // 60min headroom the function itself uses when a caller doesn't override it.
+  timeoutMs: number = FORCED_TOOL_TURN_HARD_TIMEOUT_MS,
   onSessionId?: (sessionId: string) => void,
   maxRetries: number = 2
 ): Promise<T | null> {
