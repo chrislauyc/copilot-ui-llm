@@ -1,4 +1,4 @@
-import { runForcedToolTurn } from './toolCallEnforcement';
+import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
@@ -228,6 +228,15 @@ export function buildAuditorSessionSettings(
     // heartbeat during long reasoning turns without the token overhead of
     // "detailed". Models that don't support reasoning summaries ignore this.
     reasoningSummary: 'concise' as const,
+    // Explicit `replace` with our curated content -- NOT left unset. An
+    // unset/absent systemMessage makes the SDK fall back to its own full
+    // default `copilot-cli` system prompt (task/sub-agent, sql,
+    // report_intent, submit_code_review docs, etc.), which is exactly what
+    // TOOL_USAGE_BOILERPLATE's doc comment above says this session
+    // deliberately excludes. See issue #208: the original bug was that
+    // resumeSession()'s `resumeConfig` (toolCallEnforcement.ts) didn't
+    // carry this field, not that the field itself was wrong -- so the fix
+    // is to also pass it on resume, not drop it.
     systemMessage: {
         mode: "replace",
         content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
@@ -319,15 +328,15 @@ export async function executeAuditSession<T>(
     sessionId = session.sessionId;
     onSessionId?.(session.sessionId);
 
-    const turnResult = await runForcedToolTurn(session, executionConfig, toolName, userPrompt, {
+    const turnResult = await runForcedToolTurnUntilTimeout(session, executionConfig, toolName, userPrompt, {
       client,
       abortSignal,
       timeoutMs,
       maxRetries,
       getResult: () => result,
       tools: sessionSettings.tools,
+      systemMessage: sessionSettings.systemMessage as SessionConfig['systemMessage'],
       responseRequirements,
-      freshSessionConfig: sessionSettings as SessionConfig & { autoApproveAll?: boolean },
       onSessionId: (id) => {
         sessionId = id;
         onSessionId?.(id);
