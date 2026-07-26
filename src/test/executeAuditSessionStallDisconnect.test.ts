@@ -122,15 +122,13 @@ describe('executeAuditSession: stalled sessions are always disconnected (issue #
     // executeAuditSession to clean up after a successful run.
     expect(finalSession.disconnect).toHaveBeenCalledTimes(1);
 
-    // TODO(#187): re-enable once we've double-checked this holds under the
-    // real CopilotClient too (this test only exercises the boundary.ts seam
-    // via a mock, per the harness built for #A1) -- the underlying fix
-    // (disconnecting the stalled session before discarding it, see
-    // runForcedToolTurn's sendWithStallRetry) already has unit coverage in
-    // toolCallEnforcement.test.ts (issue #186). Confirms, at the
-    // executeAuditSession level, the resource leak seen conceptually in the
-    // log (two full sessions spun up for one PR review, only the second
-    // ever cleaned up).
-    // expect(stalledSession.disconnect).toHaveBeenCalledTimes(1);
+    // The actual regression this test guards against: before the fix in
+    // runForcedToolTurn's sendWithStallRetry (toolCallEnforcement.ts:359),
+    // the stalled session was dropped without ever calling disconnect(),
+    // leaking a live connection every time a stall triggered recovery.
+    // This is the same leak issue #186 covers at the runForcedToolTurn unit
+    // level; this asserts it holds through the full executeAuditSession
+    // integration as well.
+    expect(stalledSession.disconnect).toHaveBeenCalledTimes(1);
   });
 });
