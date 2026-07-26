@@ -195,10 +195,19 @@ export function buildAuditorSessionSettings(
     // heartbeat during long reasoning turns without the token overhead of
     // "detailed". Models that don't support reasoning summaries ignore this.
     reasoningSummary: 'concise' as const,
-    systemMessage: {
-        mode: "replace",
-        content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
-    },
+    // Deliberately NOT setting `systemMessage` here (see issue #208). It
+    // previously lived in the SDK-level system prompt via `mode: "replace"`,
+    // but that field is session-config-dependent: resumeSession()'s
+    // `resumeConfig` (toolCallEnforcement.ts) never carried it, so every
+    // stall/nudge-triggered resume silently dropped back to the SDK's
+    // *default* CLI system message instead of keeping ours -- both breaking
+    // the auditor's instructions and busting the prompt cache (a much
+    // larger default system prompt has to be reprocessed on every resume).
+    // The durable instructions (TOOL_USAGE_BOILERPLATE + systemPrompt) are
+    // now folded into the first-turn user prompt instead (see
+    // executeAuditSession below), which is part of conversation history and
+    // therefore survives resumeSession()/createSession() identically, with
+    // nothing session-config-dependent left to lose or regenerate.
     tools: [
       {
         name: toolName,
@@ -286,7 +295,13 @@ export async function executeAuditSession<T>(
     sessionId = session.sessionId;
     onSessionId?.(session.sessionId);
 
-    const turnResult = await runForcedToolTurn(session, executionConfig, toolName, userPrompt, {
+    // See the comment on buildAuditorSessionSettings: this used to be the
+    // SDK-level `systemMessage`, which resumeSession() would silently drop.
+    // Folding it into the first-turn prompt keeps it part of conversation
+    // history instead, so it survives every retry/resume path unchanged.
+    const promptWithInstructions = `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}\n\n${userPrompt}`;
+
+    const turnResult = await runForcedToolTurn(session, executionConfig, toolName, promptWithInstructions, {
       client,
       abortSignal,
       timeoutMs,
