@@ -517,11 +517,23 @@ export const FORCED_TOOL_TURN_HARD_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
  * knobs (`maxStallRetries`, `freshSessionConfig`) that don't apply here --
  * there is no stall detection or stall recovery in this function, so
  * nothing consumes them.
+ *
+ * `systemMessage` is re-added on top of that base shape (it is NOT part of
+ * `freshSessionConfig` here, since there is no fresh-session path in this
+ * function -- only `resumeSession`). Without it, the nudge-retry resume
+ * path below has no way to carry the caller's curated system prompt across
+ * `client.resumeSession()`, which silently falls back to the SDK's full
+ * default `copilot-cli` system prompt for the remainder of the turn. This
+ * is exactly the issue #208 regression: the original bug was that
+ * `resumeSession()`'s `resumeConfig` didn't carry `systemMessage`, not that
+ * the field itself was wrong, so the fix is to also pass it on resume.
  */
 export type ForcedToolTurnUntilTimeoutOptions<T> = Omit<
   ForcedToolTurnOptions<T>,
   'maxStallRetries' | 'freshSessionConfig'
->;
+> & {
+  systemMessage?: SessionConfig['systemMessage'];
+};
 
 /**
  * Successor to `runForcedToolTurn` for callers that don't need stall
@@ -659,7 +671,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
     const resumeConfig = {
       availableTools: targetTools,
       tools: opts.tools,
-      systemMessage: undefined as SessionConfig['systemMessage'],
+      systemMessage: opts.systemMessage,
       ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
     };
 

@@ -335,6 +335,7 @@ export async function executeAuditSession<T>(
       maxRetries,
       getResult: () => result,
       tools: sessionSettings.tools,
+      systemMessage: sessionSettings.systemMessage as SessionConfig['systemMessage'],
       responseRequirements,
       onSessionId: (id) => {
         sessionId = id;

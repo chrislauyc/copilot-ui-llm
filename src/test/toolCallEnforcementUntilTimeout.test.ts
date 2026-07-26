@@ -94,6 +94,36 @@ describe('runForcedToolTurnUntilTimeout', () => {
     expect(mockSession.sendAndWait).toHaveBeenCalledWith({ prompt: 'test prompt' }, FORCED_TOOL_TURN_HARD_TIMEOUT_MS);
   });
 
+  it('carries a caller-provided systemMessage through the nudge-retry resumeSession call (issue #208 regression)', async () => {
+    let callCount = 0;
+    const mockSession = {
+      sessionId: 'test-session',
+      on: vi.fn().mockReturnValue(vi.fn()),
+      sendAndWait: vi.fn().mockImplementation(async () => {
+        callCount++;
+      }),
+    } as any;
+
+    const curatedSystemMessage = { mode: 'replace' as const, content: 'curated auditor prompt' };
+    const mockClient = {
+      resumeSession: vi.fn().mockImplementation(async (_id, opts) => {
+        expect(opts.systemMessage).toEqual(curatedSystemMessage);
+        return mockSession;
+      }),
+    } as any;
+
+    const runPromise = runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
+      client: mockClient,
+      maxRetries: 1,
+      getResult: () => null,
+      tools: [],
+      systemMessage: curatedSystemMessage,
+    });
+
+    await expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
+    expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects on abort signal without touching resumeSession', async () => {
     const abortController = new AbortController();
     const mockSession = {
