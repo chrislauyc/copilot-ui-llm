@@ -195,19 +195,19 @@ export function buildAuditorSessionSettings(
     // heartbeat during long reasoning turns without the token overhead of
     // "detailed". Models that don't support reasoning summaries ignore this.
     reasoningSummary: 'concise' as const,
-    // Deliberately NOT setting `systemMessage` here (see issue #208). It
-    // previously lived in the SDK-level system prompt via `mode: "replace"`,
-    // but that field is session-config-dependent: resumeSession()'s
-    // `resumeConfig` (toolCallEnforcement.ts) never carried it, so every
-    // stall/nudge-triggered resume silently dropped back to the SDK's
-    // *default* CLI system message instead of keeping ours -- both breaking
-    // the auditor's instructions and busting the prompt cache (a much
-    // larger default system prompt has to be reprocessed on every resume).
-    // The durable instructions (TOOL_USAGE_BOILERPLATE + systemPrompt) are
-    // now folded into the first-turn user prompt instead (see
-    // executeAuditSession below), which is part of conversation history and
-    // therefore survives resumeSession()/createSession() identically, with
-    // nothing session-config-dependent left to lose or regenerate.
+    // Explicit `replace` with our curated content -- NOT left unset. An
+    // unset/absent systemMessage makes the SDK fall back to its own full
+    // default `copilot-cli` system prompt (task/sub-agent, sql,
+    // report_intent, submit_code_review docs, etc.), which is exactly what
+    // TOOL_USAGE_BOILERPLATE's doc comment above says this session
+    // deliberately excludes. See issue #208: the original bug was that
+    // resumeSession()'s `resumeConfig` (toolCallEnforcement.ts) didn't
+    // carry this field, not that the field itself was wrong -- so the fix
+    // is to also pass it on resume, not drop it.
+    systemMessage: {
+        mode: "replace",
+        content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
+    },
     tools: [
       {
         name: toolName,
@@ -295,13 +295,7 @@ export async function executeAuditSession<T>(
     sessionId = session.sessionId;
     onSessionId?.(session.sessionId);
 
-    // See the comment on buildAuditorSessionSettings: this used to be the
-    // SDK-level `systemMessage`, which resumeSession() would silently drop.
-    // Folding it into the first-turn prompt keeps it part of conversation
-    // history instead, so it survives every retry/resume path unchanged.
-    const promptWithInstructions = `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}\n\n${userPrompt}`;
-
-    const turnResult = await runForcedToolTurn(session, executionConfig, toolName, promptWithInstructions, {
+    const turnResult = await runForcedToolTurn(session, executionConfig, toolName, userPrompt, {
       client,
       abortSignal,
       timeoutMs,

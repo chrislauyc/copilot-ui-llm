@@ -310,7 +310,7 @@ export async function runForcedToolTurn<T>(
    */
   const sendWithStallRetry = async (
     promptOpts: { prompt: string; tool_choice?: unknown },
-    resumeConfig: { availableTools?: string[]; tools?: unknown; provider?: ProviderConfig },
+    resumeConfig: { availableTools?: string[]; tools?: unknown; provider?: ProviderConfig; systemMessage?: SessionConfig['systemMessage'] },
   ): Promise<void> => {
     let stallAttempt = 0;
     let currentPromptOpts = promptOpts;
@@ -407,7 +407,7 @@ export async function runForcedToolTurn<T>(
     }
   };
 
-  await sendWithStallRetry({ prompt: initialPrompt }, { tools: opts.tools, ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}) });
+  await sendWithStallRetry({ prompt: initialPrompt }, { tools: opts.tools, systemMessage: opts.freshSessionConfig?.systemMessage, ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}) });
   
   let lastAssistantText = tracker.getText();
   tracker.unsubscribe();
@@ -433,6 +433,7 @@ export async function runForcedToolTurn<T>(
     const resumeConfig = {
       availableTools: targetTools,
       tools: opts.tools,
+      systemMessage: opts.freshSessionConfig?.systemMessage,
       ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
     };
     
