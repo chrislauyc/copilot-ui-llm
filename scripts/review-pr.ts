@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime.ts';
 import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper.ts';
+import { FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from '../src/utils/toolCallEnforcement.ts';
 import { submitCodeReviewTool as baseSubmitCodeReviewTool } from '../src/config/tools.ts';
 import { getFilteredDiff } from './diffFilter';
 import {
@@ -274,7 +275,7 @@ async function main() {
         toolCallExample: SUBMIT_CODE_REVIEW_EXAMPLE,
       },
       undefined,
-      600000,
+      FORCED_TOOL_TURN_HARD_TIMEOUT_MS,
       (id) => {
         sessionId = id;
         setActiveOpenRouterSessionId(id);

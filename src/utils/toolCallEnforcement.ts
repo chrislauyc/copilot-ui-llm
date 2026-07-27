@@ -121,8 +121,23 @@ export async function sendAndWaitWithAbort(
     // in logs even though the model may have run several investigative
     // tool calls beforehand.
     if (ev.type === 'tool.execution_start') {
-      const toolName = (ev.data as Record<string, unknown> | undefined)?.toolName;
-      console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+      const data = ev.data as Record<string, unknown> | undefined;
+      const toolName = data?.toolName;
+      // Per the SDK's ToolExecutionStartData type, `toolName` is a required
+      // string -- this is an assumption about the SDK's wire shape, not
+      // something we've validated ourselves. Rather than silently logging
+      // "tool used: undefined" if that assumption is ever wrong (SDK
+      // version change, malformed event, etc.), fail loudly so a broken
+      // assumption is visible instead of masquerading as a real tool name.
+      if (typeof toolName === 'string' && toolName.length > 0) {
+        console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+      } else {
+        console.error(
+          `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: 'tool.execution_start' event is missing a valid ` +
+          `string 'toolName' in its data (got: ${JSON.stringify(data)}). This violates an assumption about ` +
+          `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
+        );
+      }
       toolExecutionActive = true;
     }
 
@@ -140,7 +155,15 @@ export async function sendAndWaitWithAbort(
       usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
     ) {
       usageTelemetryLogCount++;
-      console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
+      if (ev.data && typeof ev.data === 'object') {
+        console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
+      } else {
+        console.error(
+          `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: '${ev.type}' event has no usable 'data' object ` +
+          `(got: ${JSON.stringify(ev.data)}). This violates an assumption about the SDK's event contract -- ` +
+          `investigate before trusting this event's downstream handling.`,
+        );
+      }
     }
   });
 
@@ -494,11 +517,23 @@ export const FORCED_TOOL_TURN_HARD_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
  * knobs (`maxStallRetries`, `freshSessionConfig`) that don't apply here --
  * there is no stall detection or stall recovery in this function, so
  * nothing consumes them.
+ *
+ * `systemMessage` is re-added on top of that base shape (it is NOT part of
+ * `freshSessionConfig` here, since there is no fresh-session path in this
+ * function -- only `resumeSession`). Without it, the nudge-retry resume
+ * path below has no way to carry the caller's curated system prompt across
+ * `client.resumeSession()`, which silently falls back to the SDK's full
+ * default `copilot-cli` system prompt for the remainder of the turn. This
+ * is exactly the issue #208 regression: the original bug was that
+ * `resumeSession()`'s `resumeConfig` didn't carry `systemMessage`, not that
+ * the field itself was wrong, so the fix is to also pass it on resume.
  */
 export type ForcedToolTurnUntilTimeoutOptions<T> = Omit<
   ForcedToolTurnOptions<T>,
   'maxStallRetries' | 'freshSessionConfig'
->;
+> & {
+  systemMessage?: SessionConfig['systemMessage'];
+};
 
 /**
  * Successor to `runForcedToolTurn` for callers that don't need stall
@@ -551,6 +586,27 @@ export async function runForcedToolTurnUntilTimeout<T>(
   const setupToolListener = (s: CopilotSession) => {
     const unsub = s.on((event: unknown) => {
       const ev = event as Record<string, unknown>;
+
+      // Same diagnostic logging as sendAndWaitWithAbort (issue #180): log
+      // every tool the model actually invokes during the turn, not just the
+      // forced target tool, and fail loudly if the SDK's tool.execution_start
+      // event doesn't have the expected string toolName -- otherwise a
+      // broken assumption about the SDK's event contract would silently
+      // masquerade as "tool used: undefined" instead of surfacing.
+      if (ev.type === 'tool.execution_start') {
+        const data = ev.data as Record<string, unknown> | undefined;
+        const toolName = data?.toolName;
+        if (typeof toolName === 'string' && toolName.length > 0) {
+          console.log(`[runForcedToolTurnUntilTimeout] tool used: ${toolName}`);
+        } else {
+          console.error(
+            `[runForcedToolTurnUntilTimeout] UNEXPECTED EVENT SHAPE: 'tool.execution_start' event is missing a valid ` +
+            `string 'toolName' in its data (got: ${JSON.stringify(data)}). This violates an assumption about ` +
+            `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
+          );
+        }
+      }
+
       if (
         (ev.type === 'tool.user_requested' && targetTools.includes((ev.data as any)?.toolName)) ||
         (ev.type === 'tool.execution_start' && targetTools.includes((ev.data as any)?.toolName)) ||
@@ -615,7 +671,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
     const resumeConfig = {
       availableTools: targetTools,
       tools: opts.tools,
-      systemMessage: undefined as SessionConfig['systemMessage'],
+      systemMessage: opts.systemMessage,
       ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
     };
 
