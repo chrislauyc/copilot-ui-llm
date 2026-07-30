@@ -1,4 +1,5 @@
-import { CopilotClient, CopilotSession, SdkProviderConfig as ProviderConfig, SessionConfig, MessageOptions } from '../copilotSdk/boundary';
+import { CopilotClient, CopilotSession, SdkProviderConfig as ProviderConfig, SessionConfig, MessageOptions, Tool } from '../copilotSdk/boundary';
+import { registerSessionPolicy, resumeHardenedSession, deleteHardenedSessionPolicy, SessionPolicy } from '../copilotSdk/hardenedSession';
 
 /**
  * How much of the model's last assistant message to include when we give up
@@ -278,6 +279,20 @@ export interface ForcedToolTurnOptions<T> {
   maxRetries?: number;
   getResult: () => T | undefined;
   tools?: any[]; // CopilotSDK Tool array
+  /**
+   * SDK-level tool allowlist for the turn as a whole (as opposed to the
+   * narrower `targetTools` allowlist a nudge-retry resume switches to). Fed
+   * into the `SessionPolicy` registered for stall-retry resumes via
+   * `registerSessionPolicy`/`resumeHardenedSession` (issue #246) so a
+   * stall-retry resume restores the same toolset the turn started with,
+   * rather than silently regaining access to every built-in tool
+   * (`bash`/`view`/`grep`/`task`) the way a resume with no `availableTools`
+   * at all does. Defaults to `targetTools` (the tool(s) this turn is forcing)
+   * if omitted, which is the safest default but may be narrower than what
+   * the initial send actually had available -- callers with a broader
+   * toolset for the initial send should pass it explicitly.
+   */
+  availableTools?: string[];
   responseRequirements?: { toolCallExample?: string };
   /**
    * Called with every session this turn runs on -- the initial session, and
@@ -326,6 +341,26 @@ export interface ForcedToolTurnOptions<T> {
 }
 
 
+/**
+ * Builds the `SessionPolicy` registered before every resume in
+ * `runForcedToolTurn`/`runForcedToolTurnUntilTimeout`. Auto-approves every
+ * tool in `availableTools` -- matching these functions' pre-#246 behavior of
+ * relying on `CopilotClient`'s auto-approve-all resume default -- but scoped
+ * to the tools actually allowed for the turn, rather than truly all tools.
+ */
+function buildResumePolicy(
+  availableTools: readonly string[],
+  tools: any[] | undefined,
+  systemMessage: SessionConfig['systemMessage'] | undefined
+): SessionPolicy {
+  return {
+    availableTools,
+    tools: tools as readonly Tool[] | undefined,
+    systemMessage,
+    autoApprovedTools: availableTools,
+  };
+}
+
 export async function runForcedToolTurn<T>(
   session: CopilotSession,
   executionConfig: { provider?: unknown },
@@ -342,6 +377,17 @@ export async function runForcedToolTurn<T>(
   
   let toolCalled = false;
   const targetTools = Array.isArray(toolName) ? toolName : [toolName];
+  const turnAvailableTools = opts.availableTools ?? targetTools;
+  // Tracks the availableTools allowlist currently in effect, so a stall-retry
+  // that fires while we're mid-nudge stays scoped to the nudge's narrower
+  // targetTools policy rather than reverting to the turn's full toolset.
+  let currentAvailableTools = turnAvailableTools;
+  const resumeSystemMessage = opts.freshSessionConfig?.systemMessage;
+  registerSessionPolicy(
+    currentSessionId,
+    buildResumePolicy(currentAvailableTools, opts.tools, resumeSystemMessage)
+  );
+  try {
   let tracker = trackLastAssistantMessage(currentSession);
   
   const setupToolListener = (s: CopilotSession) => {
@@ -373,7 +419,6 @@ export async function runForcedToolTurn<T>(
    */
   const sendWithStallRetry = async (
     promptOpts: { prompt: string; tool_choice?: unknown },
-    resumeConfig: { availableTools?: string[]; tools?: unknown; provider?: ProviderConfig; systemMessage?: SessionConfig['systemMessage'] },
   ): Promise<void> => {
     let stallAttempt = 0;
     let currentPromptOpts = promptOpts;
@@ -435,7 +480,15 @@ export async function runForcedToolTurn<T>(
               `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
               `attempting to resume the stalled session before falling back to a fresh one...`,
             );
-            currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig as SessionConfig);
+            registerSessionPolicy(
+              currentSessionId,
+              buildResumePolicy(currentAvailableTools, opts.tools, resumeSystemMessage)
+            );
+            currentSession = await resumeHardenedSession(
+              opts.client,
+              currentSessionId,
+              executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}
+            );
             currentSessionId = currentSession.sessionId;
             opts.onSessionId?.(currentSessionId);
             resumeAttempted = true;
@@ -447,9 +500,22 @@ export async function runForcedToolTurn<T>(
               `[runForcedToolTurn] resume attempt itself stalled (attempt ${stallAttempt}/${maxStallRetries}); ` +
               `starting a new session and retrying the original prompt...`,
             );
+            // This branch abandons currentSessionId in favor of a fresh
+            // session rather than resuming it, so it's never re-keyed the
+            // way resumeHardenedSession's resume path re-keys stale ids --
+            // evict it here or it orphans an entry in policyBySessionId.
+            deleteHardenedSessionPolicy(currentSessionId);
             currentSession = await opts.client.createSession(opts.freshSessionConfig);
             currentSessionId = currentSession.sessionId;
             opts.onSessionId?.(currentSessionId);
+            // The fresh session wasn't created via createHardenedSession, so
+            // nothing has registered a policy for it yet -- without this, a
+            // subsequent stall's resumeHardenedSession call on this id would
+            // throw "no policy registered" instead of resuming it.
+            registerSessionPolicy(
+              currentSessionId,
+              buildResumePolicy(currentAvailableTools, opts.tools, resumeSystemMessage)
+            );
             currentPromptOpts = { prompt: initialPrompt };
             resumeAttempted = false;
           }
@@ -458,7 +524,15 @@ export async function runForcedToolTurn<T>(
             `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
             `resuming session and retrying the same prompt...`,
           );
-          currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig as SessionConfig);
+          registerSessionPolicy(
+            currentSessionId,
+            buildResumePolicy(currentAvailableTools, opts.tools, resumeSystemMessage)
+          );
+          currentSession = await resumeHardenedSession(
+            opts.client,
+            currentSessionId,
+            executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}
+          );
           currentSessionId = currentSession.sessionId;
           opts.onSessionId?.(currentSessionId);
         }
@@ -470,7 +544,7 @@ export async function runForcedToolTurn<T>(
     }
   };
 
-  await sendWithStallRetry({ prompt: initialPrompt }, { tools: opts.tools, systemMessage: opts.freshSessionConfig?.systemMessage, ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}) });
+  await sendWithStallRetry({ prompt: initialPrompt });
   
   let lastAssistantText = tracker.getText();
   tracker.unsubscribe();
@@ -493,14 +567,16 @@ export async function runForcedToolTurn<T>(
       ? `You did not call any of: ${toolNamesStr}. Your last message was:\n"""\n${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}\n"""\nYou must now call one of ${toolNamesStr} with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`
       : `You ended your turn without calling any of: ${toolNamesStr}. You must now call one of ${toolNamesStr} with your findings. Do not respond conversationally and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`;
       
-    const resumeConfig = {
-      availableTools: targetTools,
-      tools: opts.tools,
-      systemMessage: opts.freshSessionConfig?.systemMessage,
-      ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
-    };
-    
-    currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig);
+    currentAvailableTools = targetTools;
+    registerSessionPolicy(
+      currentSessionId,
+      buildResumePolicy(currentAvailableTools, opts.tools, resumeSystemMessage)
+    );
+    currentSession = await resumeHardenedSession(
+      opts.client,
+      currentSessionId,
+      executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}
+    );
     currentSessionId = currentSession.sessionId;
     opts.onSessionId?.(currentSessionId);
     
@@ -515,7 +591,7 @@ export async function runForcedToolTurn<T>(
       promptOpts.tool_choice = { type: 'function', function: { name: targetTools[0] } };
     }
     
-    await sendWithStallRetry(promptOpts, resumeConfig);
+    await sendWithStallRetry(promptOpts);
     
     lastAssistantText = tracker.getText() || lastAssistantText;
     tracker.unsubscribe();
@@ -540,6 +616,13 @@ export async function runForcedToolTurn<T>(
   }
   
   return { result: finalResult as T, session: currentSession, lastAssistantText, toolCalled };
+  } finally {
+    // Evict whatever session id we ended on -- resumeHardenedSession already
+    // drops each stale intermediate id as it re-keys, so this is the only
+    // entry left to clean up. Without this, policyBySessionId only grows:
+    // every turn through this hot path would leak one entry forever.
+    deleteHardenedSessionPolicy(currentSessionId);
+  }
 }
 
 /**
@@ -621,6 +704,11 @@ export async function runForcedToolTurnUntilTimeout<T>(
 
   let toolCalled = false;
   const targetTools = Array.isArray(toolName) ? toolName : [toolName];
+  registerSessionPolicy(
+    currentSessionId,
+    buildResumePolicy(opts.availableTools ?? targetTools, opts.tools, opts.systemMessage)
+  );
+  try {
   let tracker = trackLastAssistantMessage(currentSession);
   // Same usage-telemetry logging sendAndWaitWithAbort does (issue #158,
   // #180). runForcedToolTurnUntilTimeout replaced runForcedToolTurn (and its
@@ -731,14 +819,15 @@ export async function runForcedToolTurnUntilTimeout<T>(
       ? `You did not call any of: ${toolNamesStr}. Your last message was:\n"""\n${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}\n"""\nYou must now call one of ${toolNamesStr} with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`
       : `You ended your turn without calling any of: ${toolNamesStr}. You must now call one of ${toolNamesStr} with your findings. Do not respond conversationally and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`;
 
-    const resumeConfig = {
-      availableTools: targetTools,
-      tools: opts.tools,
-      systemMessage: opts.systemMessage,
-      ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
-    };
-
-    currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig);
+    registerSessionPolicy(
+      currentSessionId,
+      buildResumePolicy(targetTools, opts.tools, opts.systemMessage)
+    );
+    currentSession = await resumeHardenedSession(
+      opts.client,
+      currentSessionId,
+      executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}
+    );
     currentSessionId = currentSession.sessionId;
     opts.onSessionId?.(currentSessionId);
 
@@ -777,4 +866,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
   }
 
   return { result: finalResult as T, session: currentSession, lastAssistantText, toolCalled };
+  } finally {
+    deleteHardenedSessionPolicy(currentSessionId);
+  }
 }
