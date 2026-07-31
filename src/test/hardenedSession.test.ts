@@ -4,6 +4,8 @@ import {
   registerSessionPolicy,
   resumeHardenedSession,
   deleteHardenedSessionPolicy,
+  getRejectedToolAttempts,
+  clearRejectedToolAttempts,
   SessionPolicy,
 } from '../copilotSdk/hardenedSession';
 import { CopilotClient } from '../copilotSdk/boundary';
@@ -86,6 +88,33 @@ describe('resumeHardenedSession', () => {
     expect(client.resumeSession).toHaveBeenCalledTimes(2);
   });
 
+  it('migrates recorded rejections to the new id when resumeSession re-keys the session', async () => {
+    const ids = ['session-migrate-a', 'session-migrate-b'];
+    const resumeSession = vi.fn(async (_sessionId: string, config: any) => ({
+      sessionId: ids.shift(),
+      config,
+    }));
+    const client = { createSession: vi.fn(), resumeSession } as unknown as CopilotClient;
+    registerSessionPolicy('session-migrate', policy);
+
+    // First resume re-keys 'session-migrate' -> 'session-migrate-a'.
+    const first = await resumeHardenedSession(client, 'session-migrate');
+    expect(first.sessionId).toBe('session-migrate-a');
+    let config = (client.resumeSession as any).mock.calls[0][1];
+    await config.onPermissionRequest({ kind: 'shell' }, { sessionId: 'session-migrate-a' });
+    expect(getRejectedToolAttempts('session-migrate-a')).toEqual(['shell']);
+
+    // Second resume, keyed off the intermediate id, re-keys again -> 'session-migrate-b'.
+    // The rejection recorded under the intermediate id must migrate along with the policy.
+    const second = await resumeHardenedSession(client, 'session-migrate-a');
+    expect(second.sessionId).toBe('session-migrate-b');
+    config = (client.resumeSession as any).mock.calls[1][1];
+    await config.onPermissionRequest({ kind: 'view' }, { sessionId: 'session-migrate-b' });
+
+    expect(getRejectedToolAttempts('session-migrate-a')).toEqual([]);
+    expect(getRejectedToolAttempts('session-migrate-b')).toEqual(['shell', 'view']);
+  });
+
   it('passes through non-policy base config (e.g. provider) without letting it override policy fields', async () => {
     const client = makeMockClient();
     registerSessionPolicy('session-4', policy);
@@ -127,5 +156,108 @@ describe('resumeHardenedSession', () => {
     deleteHardenedSessionPolicy('session-6');
 
     await expect(resumeHardenedSession(client, 'session-6')).rejects.toThrow(/no policy registered/);
+  });
+});
+
+describe('disallowed-tool rejection (issue #246 item 3)', () => {
+  // A policy that doesn't opt any built-in into autoApprovedTools -- the
+  // default posture every session should have unless a policy explicitly
+  // widens it.
+  const noBuiltInsPolicy: SessionPolicy = {
+    availableTools: ['read_file'],
+    autoApprovedTools: ['read_file'],
+  };
+
+  it.each([
+    { name: 'bash', req: { kind: 'shell' } },
+    { name: 'view', req: { kind: 'read' } },
+    { name: 'grep', req: { kind: 'custom-tool', toolName: 'grep' } },
+    { name: 'task', req: { kind: 'custom-tool', toolName: 'task' } },
+  ])('rejects a resumed session\'s request for the disallowed "$name" tool', async ({ req }) => {
+    const client = makeMockClient();
+    const sessionId = `builtin-reject-${req.kind}-${'toolName' in req ? req.toolName : 'k'}`;
+    registerSessionPolicy(sessionId, noBuiltInsPolicy);
+    await resumeHardenedSession(client, sessionId);
+    const config = (client.resumeSession as any).mock.calls[0][1];
+
+    const result = await config.onPermissionRequest(req, { sessionId });
+
+    expect(result.kind).toBe('reject');
+  });
+
+  it('leaves bash/view/grep/task unavailable by default when a policy does not explicitly include them', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-defaults', noBuiltInsPolicy);
+    await resumeHardenedSession(client, 'session-defaults');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+
+    for (const req of [
+      { kind: 'shell' },
+      { kind: 'read' },
+      { kind: 'custom-tool', toolName: 'grep' },
+      { kind: 'custom-tool', toolName: 'task' },
+    ]) {
+      const result = await config.onPermissionRequest(req, { sessionId: 'session-defaults' });
+      expect(result.kind).toBe('reject');
+    }
+  });
+
+  it('approves a built-in that a policy explicitly opts into autoApprovedTools', async () => {
+    const client = makeMockClient();
+    const policyWithShell: SessionPolicy = {
+      availableTools: ['read_file'],
+      autoApprovedTools: ['shell'],
+    };
+    registerSessionPolicy('session-explicit-shell', policyWithShell);
+    await resumeHardenedSession(client, 'session-explicit-shell');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+
+    const result = await config.onPermissionRequest({ kind: 'shell' }, { sessionId: 'session-explicit-shell' });
+
+    expect(result.kind).toBe('approve-once');
+  });
+
+  it('records the attempted tool name for each rejection, in order', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-record', noBuiltInsPolicy);
+    await resumeHardenedSession(client, 'session-record');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+
+    await config.onPermissionRequest({ kind: 'shell' }, { sessionId: 'session-record' });
+    await config.onPermissionRequest({ kind: 'custom-tool', toolName: 'task' }, { sessionId: 'session-record' });
+    // An approved request should not show up in the rejection record.
+    await config.onPermissionRequest({ kind: 'custom-tool', toolName: 'read_file' }, { sessionId: 'session-record' });
+
+    expect(getRejectedToolAttempts('session-record')).toEqual(['shell', 'task']);
+  });
+
+  it('returns an empty array for a session with no rejections on file', () => {
+    expect(getRejectedToolAttempts('never-rejected-anything')).toEqual([]);
+  });
+
+  it('clearRejectedToolAttempts resets the record for a session', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-clear', noBuiltInsPolicy);
+    await resumeHardenedSession(client, 'session-clear');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+    await config.onPermissionRequest({ kind: 'shell' }, { sessionId: 'session-clear' });
+    expect(getRejectedToolAttempts('session-clear')).toEqual(['shell']);
+
+    clearRejectedToolAttempts('session-clear');
+
+    expect(getRejectedToolAttempts('session-clear')).toEqual([]);
+  });
+
+  it('deleteHardenedSessionPolicy also clears the recorded rejection history', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-delete-clears', noBuiltInsPolicy);
+    await resumeHardenedSession(client, 'session-delete-clears');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+    await config.onPermissionRequest({ kind: 'shell' }, { sessionId: 'session-delete-clears' });
+    expect(getRejectedToolAttempts('session-delete-clears')).toEqual(['shell']);
+
+    deleteHardenedSessionPolicy('session-delete-clears');
+
+    expect(getRejectedToolAttempts('session-delete-clears')).toEqual([]);
   });
 });
