@@ -3,7 +3,11 @@ import {
   CopilotSession,
   PermissionRequest,
   PermissionRequestResult,
+  SessionCapabilities,
   SessionConfig,
+  SessionEventHandler,
+  SessionEventType,
+  TypedSessionEventHandler,
   Tool,
 } from './boundary';
 
@@ -170,9 +174,126 @@ export function deriveSessionConfig(
 /** Tracks each hardened session's originating policy, keyed by session id, so a future resume (item 2) can re-derive the same config without the caller re-supplying it. */
 const policyBySessionId = new Map<string, SessionPolicy>();
 
+/**
+ * Tracks a *weak* reference to the live `CopilotSession` object backing each
+ * hardened session, keyed by session id, so `getReadonlySession` (item 5)
+ * has something to wrap without keeping the session artificially alive.
+ * Kept as a separate map from `policyBySessionId` (rather than folding the
+ * session into the policy) since the two have different lifetimes -- a
+ * policy can be registered via `registerSessionPolicy` for a session this
+ * module never created and therefore never held a reference to.
+ */
+const sessionBySessionId = new Map<string, WeakRef<CopilotSession>>();
+
+/**
+ * The subset of `CopilotSession` safe to hand to code outside the hardened
+ * wrapper: inspection and event-subscription members only. Deliberately
+ * excludes `send`/`sendAndWait` (drives the conversation), `abort` (cancels
+ * in-flight work), `setModel` (changes model outside the session's bound
+ * policy), `log` (writes to the session timeline), `disconnect` (tears the
+ * session down), and `ui`/`rpc` (further session control surfaces). None of
+ * these can change a session's tool policy directly -- `availableTools` and
+ * `onPermissionRequest` are fixed for the life of the connection -- but they
+ * let a holder drive or end a session this module wasn't asked to hand out
+ * for that purpose. A caller that legitimately needs those (e.g. the code
+ * that itself called `createHardenedSession`/`resumeHardenedSession`) already
+ * has the full `CopilotSession` from that call's return value; this view is
+ * for everyone else who only needs to observe.
+ */
+export interface ReadonlyCopilotSession {
+  readonly sessionId: string;
+  readonly workspacePath: string | undefined;
+  readonly capabilities: SessionCapabilities;
+  on<K extends SessionEventType>(eventType: K, handler: TypedSessionEventHandler<K>): () => void;
+  on(handler: SessionEventHandler): () => void;
+  getEvents: CopilotSession['getEvents'];
+}
+
+/**
+ * Wraps `session` in a `ReadonlyCopilotSession` -- the getters read live off
+ * `session` (rather than snapshotting once) so `workspacePath`/`capabilities`
+ * stay current, and `on`/`getEvents` are bound to `session` so they keep
+ * working when called detached from the returned object (e.g.
+ * `const { on } = getReadonlySession(id)!`).
+ */
+function toReadonlyView(session: CopilotSession): ReadonlyCopilotSession {
+  return {
+    get sessionId() {
+      return session.sessionId;
+    },
+    get workspacePath() {
+      return session.workspacePath;
+    },
+    get capabilities() {
+      return session.capabilities;
+    },
+    on: session.on.bind(session),
+    getEvents: session.getEvents.bind(session),
+  };
+}
+
+/**
+ * Returns a read-only view of the `CopilotSession` backing `sessionId`, for
+ * callers that only need visibility (e.g. subscribing to events) and have no
+ * business driving the session or touching its policy. Returns `undefined`
+ * if no live session is on file for `sessionId` -- e.g. it was never created
+ * or registered through this module, or it has since been evicted via
+ * `deleteHardenedSessionPolicy`.
+ *
+ * This is additive: `createHardenedSession`/`resumeHardenedSession` still
+ * return the full `CopilotSession` to their direct caller, since that caller
+ * is the one responsible for driving the session. This accessor is for
+ * *other* code that needs read access without inheriting that responsibility
+ * -- and, per this module's central premise, without any path back to
+ * `CopilotClient.createSession`/`resumeSession` that could re-loosen the
+ * policy bound to the session.
+ */
+export function getReadonlySession(sessionId: string): ReadonlyCopilotSession | undefined {
+  const ref = sessionBySessionId.get(sessionId);
+  if (!ref) {
+    return undefined;
+  }
+  const session = ref.deref();
+  if (!session) {
+    // Collected: nothing outside this module still holds it, so there's
+    // nothing to observe. Prune the now-dangling key rather than leaving it.
+    sessionBySessionId.delete(sessionId);
+    return undefined;
+  }
+  return toReadonlyView(session);
+}
+
 /** @internal exposed for hardenedSession's own resume implementation (item 2) and its tests. */
 export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
   return policyBySessionId.get(sessionId);
+}
+
+/**
+ * Stores a *weak* reference to `session` under `sessionId`, so
+ * `sessionBySessionId` doesn't keep the live `CopilotSession` (and its event
+ * emitter/listeners) reachable forever if nobody calls
+ * `deleteHardenedSessionPolicy`.
+ *
+ * A WeakRef was chosen over the alternative of wrapping/monkey-patching
+ * `session.disconnect` to auto-evict: that alternative was tried first and
+ * reverted because it replaces `disconnect` with a new function object,
+ * breaking any caller that asserts on the original mock/spy directly (as
+ * `toolCallEnforcement.test.ts`'s stall-retry tests do with
+ * `resumedSession.disconnect`) -- an invisible side effect on an object this
+ * module doesn't own. A WeakRef adds no visible behavior to `session` at
+ * all: once nothing outside this module still holds `session` alive, the
+ * entry simply stops resolving (see `getReadonlySession`, which treats a
+ * cleared WeakRef the same as an evicted one and prunes the map key too).
+ *
+ * `sessionId` is taken as an explicit argument rather than read off
+ * `session.sessionId` because `registerSessionPolicy(sessionId, policy,
+ * session)` allows the registered `sessionId` and `session.sessionId` to
+ * differ -- keying off `session.sessionId` instead would store the policy
+ * and the tracked session under different map keys, making
+ * `getReadonlySession(sessionId)` return `undefined`.
+ */
+function trackSession(sessionId: string, session: CopilotSession): void {
+  sessionBySessionId.set(sessionId, new WeakRef(session));
 }
 
 /**
@@ -182,9 +303,13 @@ export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
  * call adds an entry that nothing else removes. Not wired into any session
  * lifecycle yet (that's part of item 7, migrating real callers); exposed now
  * so that migration has a cleanup hook to call instead of reinventing one.
+ * `sessionBySessionId`'s own entries don't strictly need this, since they're
+ * WeakRefs and self-clear once the session is unreachable, but this still
+ * drops the now-empty map key rather than leaving it to linger.
  */
 export function deleteHardenedSessionPolicy(sessionId: string): void {
   policyBySessionId.delete(sessionId);
+  sessionBySessionId.delete(sessionId);
   clearRejectedToolAttempts(sessionId);
 }
 
@@ -204,6 +329,7 @@ export async function createHardenedSession(
     ...deriveSessionConfig(policy),
   });
   policyBySessionId.set(session.sessionId, policy);
+  trackSession(session.sessionId, session);
   return session;
 }
 
@@ -218,8 +344,11 @@ export async function createHardenedSession(
  * a policy for a session they didn't create so `resumeHardenedSession` still
  * has something non-partial to derive a resume config from.
  */
-export function registerSessionPolicy(sessionId: string, policy: SessionPolicy): void {
+export function registerSessionPolicy(sessionId: string, policy: SessionPolicy, session?: CopilotSession): void {
   policyBySessionId.set(sessionId, policy);
+  if (session) {
+    trackSession(sessionId, session);
+  }
 }
 
 /**
@@ -275,6 +404,7 @@ export async function resumeHardenedSession(
   } as SessionConfig);
   if (session.sessionId !== sessionId) {
     policyBySessionId.delete(sessionId);
+    sessionBySessionId.delete(sessionId);
     const rejections = rejectedAttemptsBySessionId.get(sessionId);
     if (rejections) {
       rejectedAttemptsBySessionId.delete(sessionId);
@@ -286,5 +416,6 @@ export async function resumeHardenedSession(
     }
   }
   policyBySessionId.set(session.sessionId, policy);
+  trackSession(session.sessionId, session);
   return session;
 }

@@ -6,6 +6,7 @@ import {
   deleteHardenedSessionPolicy,
   getRejectedToolAttempts,
   clearRejectedToolAttempts,
+  getReadonlySession,
   SessionPolicy,
 } from '../copilotSdk/hardenedSession';
 import { CopilotClient } from '../copilotSdk/boundary';
@@ -259,5 +260,193 @@ describe('disallowed-tool rejection (issue #246 item 3)', () => {
     deleteHardenedSessionPolicy('session-delete-clears');
 
     expect(getRejectedToolAttempts('session-delete-clears')).toEqual([]);
+  });
+});
+
+describe('getReadonlySession (issue #246 item 5)', () => {
+  function makeFakeSdkSession(sessionId: string) {
+    const onMock = vi.fn(() => () => {});
+    const getEventsMock = vi.fn(async () => []);
+    return {
+      sessionId,
+      workspacePath: `/workspaces/${sessionId}`,
+      capabilities: { ui: { elicitation: false } },
+      on: onMock,
+      getEvents: getEventsMock,
+      // Mutating/control methods that must NOT be reachable through the
+      // read-only view -- present here to prove the view doesn't forward them.
+      send: vi.fn(),
+      sendAndWait: vi.fn(),
+      abort: vi.fn(),
+      setModel: vi.fn(),
+      log: vi.fn(),
+      disconnect: vi.fn(),
+    };
+  }
+
+  it('returns undefined for a session that was never created or registered', () => {
+    expect(getReadonlySession('never-seen')).toBeUndefined();
+  });
+
+  it('exposes sessionId, workspacePath, capabilities, on, and getEvents for a session created via createHardenedSession', async () => {
+    const fakeSession = makeFakeSdkSession('ro-session-created');
+    const client = {
+      createSession: vi.fn(async () => fakeSession),
+      resumeSession: vi.fn(),
+    } as unknown as CopilotClient;
+
+    await createHardenedSession(client, {}, policy);
+    const view = getReadonlySession('ro-session-created');
+
+    expect(view).toBeDefined();
+    expect(view!.sessionId).toBe('ro-session-created');
+    expect(view!.workspacePath).toBe('/workspaces/ro-session-created');
+    expect(view!.capabilities).toEqual({ ui: { elicitation: false } });
+
+    const handler = vi.fn();
+    view!.on(handler);
+    expect(fakeSession.on).toHaveBeenCalledWith(handler);
+
+    await view!.getEvents();
+    expect(fakeSession.getEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not expose send/sendAndWait/abort/setModel/log/disconnect', async () => {
+    const fakeSession = makeFakeSdkSession('ro-session-no-mutate');
+    const client = {
+      createSession: vi.fn(async () => fakeSession),
+      resumeSession: vi.fn(),
+    } as unknown as CopilotClient;
+
+    await createHardenedSession(client, {}, policy);
+    const view = getReadonlySession('ro-session-no-mutate') as unknown as Record<string, unknown>;
+
+    for (const method of ['send', 'sendAndWait', 'abort', 'setModel', 'log', 'disconnect']) {
+      expect(view[method]).toBeUndefined();
+    }
+  });
+
+  it('tracks the session under its post-resume id when resumeSession re-keys it', async () => {
+    const oldSession = makeFakeSdkSession('ro-resume-old');
+    const newSession = makeFakeSdkSession('ro-resume-new');
+    const client = {
+      createSession: vi.fn(async () => oldSession),
+      resumeSession: vi.fn(async () => newSession),
+    } as unknown as CopilotClient;
+
+    await createHardenedSession(client, {}, policy);
+    await resumeHardenedSession(client, 'ro-resume-old');
+
+    expect(getReadonlySession('ro-resume-old')).toBeUndefined();
+    expect(getReadonlySession('ro-resume-new')).toBeDefined();
+  });
+
+  it('registerSessionPolicy makes a pre-existing session visible via getReadonlySession when passed the session object', () => {
+    const fakeSession = makeFakeSdkSession('ro-registered');
+    registerSessionPolicy('ro-registered', policy, fakeSession as unknown as Parameters<typeof registerSessionPolicy>[2]);
+
+    expect(getReadonlySession('ro-registered')).toBeDefined();
+  });
+
+  it('registerSessionPolicy without a session object leaves getReadonlySession returning undefined', () => {
+    registerSessionPolicy('ro-not-registered', policy);
+
+    expect(getReadonlySession('ro-not-registered')).toBeUndefined();
+  });
+
+  it('deleteHardenedSessionPolicy evicts the tracked session too', async () => {
+    const fakeSession = makeFakeSdkSession('ro-evicted');
+    const client = {
+      createSession: vi.fn(async () => fakeSession),
+      resumeSession: vi.fn(),
+    } as unknown as CopilotClient;
+
+    await createHardenedSession(client, {}, policy);
+    expect(getReadonlySession('ro-evicted')).toBeDefined();
+
+    deleteHardenedSessionPolicy('ro-evicted');
+
+    expect(getReadonlySession('ro-evicted')).toBeUndefined();
+  });
+
+  it('calling disconnect() on the session does not itself evict it (no wrapping of caller-owned methods)', async () => {
+    // This module deliberately does NOT wrap/replace session.disconnect to
+    // auto-evict on call -- an earlier version of this fix did, and broke
+    // toolCallEnforcement.test.ts's stall-retry tests, which assert directly
+    // on `resumedSession.disconnect` (a vi.fn() spy) after it flows through
+    // resumeHardenedSession. Wrapping replaced that spy with a different
+    // function object, so `toHaveBeenCalledTimes` on it threw. Leak
+    // avoidance instead comes from the WeakRef in sessionBySessionId (see
+    // the tests below), which needs no cooperation from `session` at all.
+    const fakeSession = makeFakeSdkSession('ro-disconnect-noop');
+    const client = {
+      createSession: vi.fn(async () => fakeSession),
+      resumeSession: vi.fn(),
+    } as unknown as CopilotClient;
+
+    await createHardenedSession(client, {}, policy);
+    await fakeSession.disconnect();
+
+    expect(fakeSession.disconnect).toHaveBeenCalledTimes(1);
+    // Still resolvable: this module has no way to know disconnect() was
+    // called, by design, so eviction is left to deleteHardenedSessionPolicy
+    // or to the WeakRef clearing once nothing else holds the session.
+    expect(getReadonlySession('ro-disconnect-noop')).toBeDefined();
+  });
+
+  it('getReadonlySession prunes a map entry whose WeakRef has been cleared (e.g. by the GC once nothing else holds the session)', async () => {
+    // Simulating real garbage collection deterministically in a unit test
+    // isn't practical, so this stubs global.WeakRef for the duration of the
+    // test to return a ref whose deref() always reports "collected" --
+    // exercising getReadonlySession's pruning branch without depending on
+    // actual GC timing.
+    const originalWeakRef = global.WeakRef;
+    class AlwaysClearedWeakRef<T extends object> {
+      constructor(_target: T) {}
+      deref(): T | undefined {
+        return undefined;
+      }
+    }
+    // @ts-expect-error -- intentionally substituting a test double for WeakRef
+    global.WeakRef = AlwaysClearedWeakRef;
+    try {
+      const fakeSession = makeFakeSdkSession('ro-weakref-cleared');
+      const client = {
+        createSession: vi.fn(async () => fakeSession),
+        resumeSession: vi.fn(),
+      } as unknown as CopilotClient;
+
+      await createHardenedSession(client, {}, policy);
+
+      expect(getReadonlySession('ro-weakref-cleared')).toBeUndefined();
+    } finally {
+      global.WeakRef = originalWeakRef;
+    }
+  });
+
+  it('keys tracking off the registered sessionId, not session.sessionId, when they differ', async () => {
+    // registerSessionPolicy's signature explicitly allows the registered id
+    // and the session object's own id to diverge. The readonly view must key
+    // off the *registered* id -- not `session.sessionId` -- or the policy
+    // (stored under the registered id) and the tracked session (stored under
+    // session.sessionId) land under different map keys.
+    const fakeSession = makeFakeSdkSession('internal-sdk-id-different-from-registered');
+    registerSessionPolicy(
+      'registered-id',
+      policy,
+      fakeSession as unknown as Parameters<typeof registerSessionPolicy>[2]
+    );
+
+    expect(getReadonlySession('registered-id')).toBeDefined();
+    expect(getReadonlySession('internal-sdk-id-different-from-registered')).toBeUndefined();
+
+    deleteHardenedSessionPolicy('registered-id');
+
+    expect(getReadonlySession('registered-id')).toBeUndefined();
+    const client = {
+      createSession: vi.fn(),
+      resumeSession: vi.fn(async (sessionId: string, config: any) => ({ sessionId, config })),
+    } as unknown as CopilotClient;
+    await expect(resumeHardenedSession(client, 'registered-id')).rejects.toThrow(/no policy registered/);
   });
 });
