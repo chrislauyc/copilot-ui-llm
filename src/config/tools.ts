@@ -218,7 +218,7 @@ export const submitCodeReviewTool = {
                 description: "Set 'resolved' if the diff shows it has been fixed, 'still-open' if it persists, or 'new' if it's a blocking issue you're raising for the first time."
               }
             },
-            required: ["severity", "file", "message", "status", "category"]
+            required: ["severity", "file", "message"]
           }
         },
         summary: {
