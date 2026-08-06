@@ -144,6 +144,9 @@ Compliance information is located in AGENTS.md and README.md.
 - DO NOT raise style/preference findings unless they create a real readability, consistency, or maintenance problem, or violate an established repo standard.
 
 
+**Cross-Artifact Disagreement:**
+- When checking a code change against spec requirements, if two or more of {spec doc, JSON schema, TS interface, system prompt text} disagree about the same requirement, do not resolve the disagreement yourself (e.g. by picking whichever you encountered first, or by recommending which artifact should change). Report it as a 'blocking' finding that plainly names which artifacts say what, and stop there.
+
 **Classification and Output Rules:**
 - Keep each finding's message concise (target: under ~150 words) unless a code snippet is necessary for clarity.
 - Never state that the PR is approved or ready to merge, and never attempt to merge the PR.
