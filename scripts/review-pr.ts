@@ -32,11 +32,11 @@ import {
 
 interface CodeReviewFinding {
   severity: 'blocking' | 'suggestion' | 'nit';
-  category?: 'bug' | 'security' | 'performance' | 'style' | 'other';
+  category: 'bug' | 'security' | 'performance' | 'style' | 'other';
   file: string;
   line?: number;
   message: string;
-  status?: 'new' | 'still-open' | 'resolved';
+  status: 'new' | 'still-open' | 'resolved';
 }
 
 interface CodeReviewResult {
