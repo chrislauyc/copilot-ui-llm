@@ -195,7 +195,17 @@ export function selectRotatingAuditorConfig(rotationIndex: number, apiKey?: stri
     singleModelPool: pool.length <= 1,
   };
 }
-
+/**
+ * Shared instruction, reused by both the PR-reviewer and codebase-audit agent
+ * prompts: when checking a code change against spec requirements, an agent
+ * must not resolve disagreements between authoritative artifacts on its own
+ * -- it must escalate by reporting a blocking finding that plainly names
+ * which artifacts say what (see issue #292).
+ */
+export function crossArtifactDisagreementInstruction(): string {
+  return `**Cross-Artifact Disagreement:**
+- When checking a code change against spec requirements, if two or more of {spec doc, JSON schema, TS interface, system prompt text} disagree about the same requirement, do not resolve the disagreement yourself (e.g. by picking whichever you encountered first, or by recommending which artifact should change). Report it as a 'blocking' finding that plainly names which artifacts say what, and stop there.`;
+}
 /**
  * Shared logic to resolve the reviewer's execution configuration via ProviderRegistry.
  * Independently configurable from the auditor role (REVIEWER_PROVIDER/REVIEWER_MODEL),
