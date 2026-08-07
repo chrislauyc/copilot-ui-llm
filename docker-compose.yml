@@ -21,7 +21,7 @@ services:
       - no-new-privileges:true
     pids_limit: 512
     # Resource ceilings: pids_limit alone doesn't stop a single process from
-    # exhausting host memory/CPU, and the /app bind mount is otherwise
+    # exhausting host memory/CPU, and the workspace bind mount is otherwise
     # unbounded, so cap all three explicitly.
     mem_limit: ${APPLET_MEM_LIMIT:-2g}
     memswap_limit: ${APPLET_MEM_LIMIT:-2g}
