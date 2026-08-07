@@ -2,6 +2,10 @@ import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
+import { RUN_TERMINAL_DOCKER_TOOL } from '../config/tools';
+import { getExecCommand } from '../workspace';
+import { truncateOutput } from './formatters';
+import { sanitizeSensitives } from './sanitizers';
 
 /**
  * Tool-usage guidance carried over from the base CLI system prompt.
@@ -218,6 +222,40 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
 }
 
 /**
+ * Headless (non-SSE) handler for `run_terminal_docker` in auditor/reviewer
+ * sessions -- these sessions have no `res`/`secureWrite` SSE stream to push
+ * `tool.result` events onto (see `makeDockerToolHandler` in toolHandlers.ts,
+ * which requires both), just a plain request/response tool call.
+ *
+ * Routes through `getExecCommand()` (see SYS-REQ-020/023) exactly like the
+ * SSE variant, so auditor sessions get the same GitSandbox locking,
+ * GIT_TIMEOUT_MS/EXEC_TIMEOUT_MS enforcement, and Docker-vs-native routing
+ * as every other centralized-workspace consumer, instead of falling back to
+ * the copilot SDK's own default bash/view/edit tools operating directly on
+ * `CopilotClient.workingDirectory` (issue #299).
+ */
+function makeAuditorExecToolHandler(abortSignal?: AbortSignal) {
+  return async (args: unknown) => {
+    const record = args as Record<string, unknown>;
+    const wd = (record.workingDir as string) || '';
+    if (wd.includes('..')) {
+      return {
+        stdout: '',
+        stderr: 'Error: Directory path traversal detected. Access denied outside workspace boundaries.',
+        exitCode: 1,
+      };
+    }
+    const execCommand = getExecCommand();
+    const result = await execCommand((record.command as string) || '', abortSignal);
+    return {
+      stdout: truncateOutput(sanitizeSensitives(result.stdout)),
+      stderr: truncateOutput(sanitizeSensitives(result.stderr)),
+      exitCode: result.exitCode,
+    };
+  };
+}
+
+/**
  * Shared session settings for auditors:
  * - No-conversational-reply enforcement (via systemPrompt)
  * - Tool-specific permission guarding
@@ -233,9 +271,11 @@ export function buildAuditorSessionSettings(
   executionConfig: ExecutionConfig,
   systemPrompt: string,
   tool: ToolDefinition,
-  onResult: (result: unknown) => void
+  onResult: (result: unknown) => void,
+  abortSignal?: AbortSignal
 ) {
   const toolName = tool.function.name;
+  const execToolName = RUN_TERMINAL_DOCKER_TOOL.function.name;
   return {
     model: executionConfig.model,
     ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
@@ -265,6 +305,18 @@ export function buildAuditorSessionSettings(
         mode: "replace",
         content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
     },
+    // Issue #299: session builders here previously only assembled the
+    // task-specific submission tool, so any session built from this
+    // function fell back to the copilot SDK's own built-in bash/view/edit
+    // tools operating directly on `CopilotClient.workingDirectory` --
+    // entirely bypassing the app's centralized workspace abstraction (no
+    // GitSandbox locking, no timeout enforcement, no Docker-vs-native
+    // routing; exactly the class of bypass SYS-REQ-020a calls out).
+    // `run_terminal_docker` is now included by default for every consumer
+    // of this shared builder (executeAuditSession and, transitively,
+    // specAuditor/complianceAudit/pbiDerivation/review-pr.ts) rather than
+    // opted into per-caller. See auditor_default_toolset.test.ts for the
+    // regression guard.
     tools: [
       {
         name: toolName,
@@ -274,6 +326,12 @@ export function buildAuditorSessionSettings(
           onResult(args);
           return { status: 'received' };
         }
+      },
+      {
+        name: execToolName,
+        description: RUN_TERMINAL_DOCKER_TOOL.function.description,
+        parameters: RUN_TERMINAL_DOCKER_TOOL.function.parameters,
+        handler: makeAuditorExecToolHandler(abortSignal),
       }
     ],
     // NOTE: this onPermissionRequest is currently unreachable in practice --
@@ -291,10 +349,11 @@ export function buildAuditorSessionSettings(
                             (Array.isArray(record.toolCalls) && record.toolCalls[0] && typeof record.toolCalls[0] === 'object'
                               ? ((record.toolCalls[0] as Record<string, unknown>).function as Record<string, unknown> | undefined)?.name as string | undefined
                               : undefined);
-      const allowed = !requestedTool || requestedTool === toolName || 
-                      (Array.isArray(record.toolCalls) && record.toolCalls.every((tc: unknown) => 
-                        tc && typeof tc === 'object' && ((tc as Record<string, unknown>).function as Record<string, unknown> | undefined)?.name === toolName));
-      return allowed ? { kind: 'approve-once' } : { kind: 'reject', feedback: 'Auditor sessions must not execute tools.' };
+      const allowedToolNames = [toolName, execToolName];
+      const allowed = !requestedTool || allowedToolNames.includes(requestedTool) ||
+                      (Array.isArray(record.toolCalls) && record.toolCalls.every((tc: unknown) =>
+                        tc && typeof tc === 'object' && allowedToolNames.includes(((tc as Record<string, unknown>).function as Record<string, unknown> | undefined)?.name as string)));
+      return allowed ? { kind: 'approve-once' } : { kind: 'reject', feedback: `Auditor sessions may only call ${toolName} or ${execToolName}.` };
     },
     streaming: false,
   };
@@ -339,7 +398,8 @@ export async function executeAuditSession<T>(
       executionConfig,
       systemPrompt,
       tool,
-      (args) => { result = args as T; }
+      (args) => { result = args as T; },
+      abortSignal
     );
 
     let session: CopilotSession;
@@ -360,6 +420,11 @@ export async function executeAuditSession<T>(
       maxRetries,
       getResult: () => result,
       tools: sessionSettings.tools,
+      // Explicit, not left to the [toolName]-only default: without this, a
+      // stall/nudge resume's SessionPolicy would silently drop
+      // run_terminal_docker from the allowlist even though it's still
+      // present in `tools` above (issue #299).
+      availableTools: [toolName, RUN_TERMINAL_DOCKER_TOOL.function.name],
       systemMessage: sessionSettings.systemMessage as SessionConfig['systemMessage'],
       responseRequirements,
       onSessionId: (id) => {
