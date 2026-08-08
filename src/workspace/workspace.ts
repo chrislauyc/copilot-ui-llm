@@ -1,23 +1,13 @@
 import * as docker from "./dockerRunner";
 import * as native from "./nativeRunner";
-import * as desktop from "./desktopRunner";
 import { GitSandbox } from "./git";
 
 function isAIStudio(): boolean {
   return process.env.AI_STUDIO === "true" || process.env.NODE_ENV === "test" || process.env.VITEST === "true";
 }
 
-// Distinct from AI Studio's native mode: AI Studio's nativeRunner mints an
-// ephemeral mkdtemp workspace, whereas desktop mode runs against a real host
-// project checkout (rooted at WORKSPACE_HOST_LOCATION, see desktopRunner.ts).
-function isDesktop(): boolean {
-  return process.env.RUNNER_MODE === "desktop";
-}
-
 function getRunner() {
-  if (isAIStudio()) return native;
-  if (isDesktop()) return desktop;
-  return docker;
+  return isAIStudio() ? native : docker;
 }
 
 // Shared singleton — one instance means one busy flag, so withLock
