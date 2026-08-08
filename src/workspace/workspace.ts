@@ -2,12 +2,31 @@ import * as docker from "./dockerRunner";
 import * as native from "./nativeRunner";
 import { GitSandbox } from "./git";
 
+export type RunnerMode = "native" | "docker";
+
+/**
+ * Pure decision logic for issue #301: given explicit env inputs, decide
+ * which runner mode applies. No process.env reads, no I/O -- takes the
+ * three relevant env values as arguments so it can be unit-tested
+ * exhaustively without mocking process.env or triggering real
+ * process/container behavior.
+ */
+export function selectRunnerMode(env: {
+  AI_STUDIO?: string;
+  NODE_ENV?: string;
+  VITEST?: string;
+}): RunnerMode {
+  return env.AI_STUDIO === "true" || env.NODE_ENV === "test" || env.VITEST === "true"
+    ? "native"
+    : "docker";
+}
+
 function isAIStudio(): boolean {
-  return process.env.AI_STUDIO === "true" || process.env.NODE_ENV === "test" || process.env.VITEST === "true";
+  return selectRunnerMode(process.env) === "native";
 }
 
 function getRunner() {
-  return isAIStudio() ? native : docker;
+  return selectRunnerMode(process.env) === "native" ? native : docker;
 }
 
 // Shared singleton — one instance means one busy flag, so withLock
