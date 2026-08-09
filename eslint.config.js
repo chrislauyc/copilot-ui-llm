@@ -82,7 +82,7 @@ export default [
             "message": "❌ *.pure.ts files may not import from src/workspace (transitively reaches getExecCommand/getGitSandbox, which are I/O-bearing). Move this logic to a non-pure file (issue #320)."
           },
           {
-            "group": ["**/copilotSdk/boundary", "**/copilotSdk/hardenedSession"],
+            "group": ["**/copilotSdk/*", "**/copilotSdk/**"],
             "message": "❌ *.pure.ts files may not import SDK client modules. Move this logic to a non-pure file (issue #320)."
           }
         ]

@@ -165,8 +165,8 @@ into an enforced convention rather than an ad-hoc pattern.
 **The rule:** a `*.pure.ts` file may not import anything I/O-bearing --
 `fs`, `child_process`, `net`/`http`/`https`, `src/workspace` (or any module
 that transitively reaches `getExecCommand`/`getGitSandbox`), or SDK client
-modules (`@github/copilot-sdk`, `src/copilotSdk/boundary.ts`,
-`src/copilotSdk/hardenedSession.ts`). This is enforced by the
+modules (`@github/copilot-sdk`, or any module under `src/copilotSdk/`,
+e.g. `boundary.ts`/`hardenedSession.ts`). This is enforced by the
 `**/*.pure.ts` block in `eslint.config.js`, not just documented -- an
 unenforced naming convention drifts silently (see below).
 
