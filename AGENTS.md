@@ -153,3 +153,49 @@ currently only wired up inside `sendAndWaitWithAbort`'s dormant watchdog, but wa
 pulled out on its own so the pattern doesn't have to be rediscovered if it's ever
 needed by a new call site -- reach for it directly rather than re-deriving the
 `tool.execution_start`/`tool.execution_complete` bookkeeping from scratch.
+
+## `*.pure.ts` convention
+
+Some functions are naturally "config/args in, plain value out" -- no closures
+over I/O, no side effects. When splitting one of these out of a file that's
+otherwise impure (calls `fs`, shells out, hits the SDK, etc.), the pure half
+goes in a co-located `foo.pure.ts` beside `foo.ts`. No new directory
+structure -- the suffix is the whole convention.
+
+**Rule for a `*.pure.ts` file:** it must not import anything I/O-bearing --
+`fs`, `child_process`, `net`/`http`, the `workspace` module (or anything that
+transitively reaches `getExecCommand()`/`getGitSandbox()`), SDK client
+modules (`@github/copilot-sdk`, `src/copilotSdk/**`), etc. This is enforced
+by an eslint rule (`eslint.config.js`, `files: ["**/*.pure.ts"]`) rather than
+left as a naming convention only -- an unenforced convention drifts silently.
+See issue #320: `buildAuditorSessionSettings` was the function issue #301
+cited as an example of pure "config in, tool array out" logic, and it turned
+out to fail the rule -- it returned an object containing a handler closure
+over `getExecCommand()`. Naming that file `.pure.ts` on the strength of its
+current shape would have been a mislabel a lint rule catches immediately;
+naming conventions alone don't.
+
+**What the lint rule actually catches:** only *direct* imports in the
+`*.pure.ts` file itself. It has no transitive-import analysis, so a pure file
+that imports a supposedly-harmless helper which itself imports `fs` two hops
+away will pass the rule while still not being pure in practice. Keep a
+`*.pure.ts` file's imports to other `*.pure.ts` files, types, and plain
+config/constant modules to stay meaningfully pure, not just pure by the
+rule's letter.
+
+**Reference cases:**
+- `src/utils/auditorHelper.pure.ts` -- `buildAuditorSessionSettingsPure`
+  computes the declarative session-settings shape (model/provider/
+  systemMessage/tool metadata, no handlers). The impure wrapper,
+  `buildAuditorSessionSettings` in `auditorHelper.ts`, attaches
+  `makeAuditorExecToolHandler`'s `getExecCommand()`-closing handler and the
+  SDK's `onPermissionRequest` callback on top of that shape.
+- `src/workspace/workspace.pure.ts` -- `isAIStudio()`, a plain
+  `process.env` read extracted from `workspace.ts`.
+
+**Out of scope for issue #320 (tracked separately, under #301):** splitting
+`getRunner()` itself. It currently returns the `native`/`docker` module
+namespace directly, both of which transitively import `child_process`, so it
+fails this rule too -- but changing its return type/behavior (e.g. to a
+plain mode value instead of a module) is an implementation change, not a
+convention/enforcement task.
