@@ -9,13 +9,20 @@ import {
 } from './boundary';
 
 /** Config fields callers must NOT supply themselves -- always derived by `_createConfig()`. */
-type ConfigOwnedKeys = 'availableTools' | 'tools' | 'systemMessage' | 'autoApproveAll' | 'onPermissionRequest';
+type ConfigOwnedKeys =
+  | 'availableTools'
+  | 'tools'
+  | 'systemMessage'
+  | 'autoApproveAll'
+  | 'onPermissionRequest'
+  | 'model';
 
 /**
  * Whatever the caller still needs to provide to create/resume a session
- * (`workingDirectory`, `model` override via provider config, etc) --
- * anything `_createConfig()` derives is excluded at the type level so it
- * can never be supplied out of band (mirrors `HardenedSessionBaseConfig`).
+ * (`workingDirectory`, etc) -- anything `_createConfig()` derives, including
+ * `model` (owned state per SYS-REQ-027, set via `setModelName`), is excluded
+ * at the type level so it can never be supplied out of band (mirrors
+ * `HardenedSessionBaseConfig`).
  */
 export type SessionWrapperBaseConfig = Omit<SessionConfig, ConfigOwnedKeys>;
 
@@ -271,10 +278,20 @@ export class SessionWrapper {
    * (carries forward SYS-REQ-026b's intent -- see issue #208's
    * systemMessage-drop-on-resume hazard in boundary.ts/AGENTS.md, which
    * this sidesteps by always re-passing systemMessage explicitly).
+   *
+   * Requires `setModelName` to have been called first. `model` is owned
+   * state (see `ConfigOwnedKeys`), so there's no `_baseConfig` fallback to
+   * silently merge in its place -- an unset model fails loudly here rather
+   * than spreading `model: undefined` over any value the caller thinks
+   * they've configured (SYS-REQ-027's "state lives on the instance" is only
+   * meaningful if a missing piece of it is an error, not a silent default).
    */
   async sendAndWait(prompt: string | MessageOptions, timeout?: number): Promise<AssistantMessageEvent | undefined> {
     if (!this._client) {
       throw new Error('SessionWrapper.sendAndWait: no CopilotClient was supplied to this instance.');
+    }
+    if (!this._modelName) {
+      throw new Error('SessionWrapper.sendAndWait: no model name was set. Call setModelName() first.');
     }
     const config = this._createConfig();
 
@@ -282,6 +299,9 @@ export class SessionWrapper {
       ? await this._client.resumeSession(this._session.sessionId, { ...this._baseConfig, ...config })
       : await this._client.createSession({ ...this._baseConfig, ...config });
 
+    // TS can't resolve `session.sendAndWait`'s overloads against a `string |
+    // MessageOptions` union directly (call site, not signature, must narrow) --
+    // this branch exists only for that; both arms call the same thing.
     return typeof prompt === 'string'
       ? this._session.sendAndWait(prompt, timeout)
       : this._session.sendAndWait(prompt, timeout);

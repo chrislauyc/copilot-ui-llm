@@ -146,7 +146,7 @@ describe('SessionWrapper._createConfig', () => {
 describe('SessionWrapper.sendAndWait', () => {
   it('creates on the first call, resumes on subsequent calls against the same instance', async () => {
     const { client, createCalls, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash');
+    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('hello');
     expect(createCalls).toHaveLength(1);
@@ -160,7 +160,10 @@ describe('SessionWrapper.sendAndWait', () => {
 
   it('produces no caller-visible config difference between the create call and a resume call', async () => {
     const { client, createCalls, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash', 'view').setSystemPrompt({ mode: 'append', content: 'be terse' });
+    const wrapper = new SessionWrapper(client)
+      .addTools('bash', 'view')
+      .setSystemPrompt({ mode: 'append', content: 'be terse' })
+      .setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     await wrapper.sendAndWait('turn two');
@@ -174,7 +177,7 @@ describe('SessionWrapper.sendAndWait', () => {
 
   it('re-derives config on resume: a tool added between calls is present on the resumed config, not stale', async () => {
     const { client, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash');
+    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     wrapper.addTools('view');
@@ -185,7 +188,7 @@ describe('SessionWrapper.sendAndWait', () => {
 
   it('re-derives config on resume: a tool removed between calls is absent from the resumed config', async () => {
     const { client, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash', 'view');
+    const wrapper = new SessionWrapper(client).addTools('bash', 'view').setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     wrapper.removeTools('view');
@@ -195,7 +198,25 @@ describe('SessionWrapper.sendAndWait', () => {
   });
 
   it('throws a clear error rather than calling the SDK when no client was supplied', async () => {
-    const wrapper = new SessionWrapper().addTools('bash');
+    const wrapper = new SessionWrapper().addTools('bash').setModelName('claude-sonnet-4.5');
     await expect(wrapper.sendAndWait('hello')).rejects.toThrow(/no CopilotClient/);
+  });
+
+  it('throws a clear error rather than silently dropping model when no model name was set', async () => {
+    const { client } = fakeClient();
+    const wrapper = new SessionWrapper(client).addTools('bash');
+    await expect(wrapper.sendAndWait('hello')).rejects.toThrow(/no model name was set/);
+  });
+
+  it('does not let an unset _modelName clobber a caller-supplied _baseConfig field with undefined', async () => {
+    const { client, createCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client, { workingDirectory: '/tmp/work' })
+      .addTools('bash')
+      .setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('hello');
+
+    expect(createCalls[0]?.workingDirectory).toBe('/tmp/work');
+    expect(createCalls[0]?.model).toBe('claude-sonnet-4.5');
   });
 });
