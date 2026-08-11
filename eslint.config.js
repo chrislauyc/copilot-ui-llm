@@ -28,12 +28,21 @@ export default [
     // regressions issue #246 was opened over). boundary.ts is exempt because
     // it *is* the SDK boundary -- its `super.createSession`/`super.resumeSession`
     // calls are the base-class delegation the override wraps, not a bypass.
+    // sessionWrapper.ts is exempt for the same reason during its build-out
+    // (README.md SYS-REQ-027 family): it's replacing hardenedSession.ts as
+    // the sanctioned SDK entry point, and its own `sendAndWait()` create/resume
+    // calls (SYS-REQ-027c/d) are that entry point's implementation, not a
+    // bypass of it -- it has zero production call sites wired to it yet
+    // (see the "Migration plan (hotswap)" section). This exemption is
+    // replaced by pointing the rule's messages at SessionWrapper, in the
+    // same change as the one-pass call-site migration (SYS-REQ-027e, step 6).
     // Test files are exempt where they intentionally exercise the raw SDK
     // client itself (e.g. proxy/integration tests), not the hardened wrapper.
     files: ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
     ignores: [
       "src/copilotSdk/boundary.ts",
       "src/copilotSdk/hardenedSession.ts",
+      "src/copilotSdk/sessionWrapper.ts",
       "**/*.test.ts",
       "**/*.test.tsx",
     ],
