@@ -14,6 +14,7 @@ export type {
   CopilotSession,
   PermissionRequest,
   AssistantMessageDeltaEvent,
+  AssistantMessageEvent,
   AssistantReasoningDeltaEvent,
   AssistantStreamingDeltaEvent,
   PermissionRequestResult,
