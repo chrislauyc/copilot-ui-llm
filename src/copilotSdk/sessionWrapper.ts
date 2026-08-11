@@ -1,4 +1,23 @@
-import { PermissionRequest, PermissionRequestResult, SessionConfig } from './boundary';
+import {
+  AssistantMessageEvent,
+  CopilotClient,
+  CopilotSession,
+  MessageOptions,
+  PermissionRequest,
+  PermissionRequestResult,
+  SessionConfig,
+} from './boundary';
+
+/** Config fields callers must NOT supply themselves -- always derived by `_createConfig()`. */
+type ConfigOwnedKeys = 'availableTools' | 'tools' | 'systemMessage' | 'autoApproveAll' | 'onPermissionRequest';
+
+/**
+ * Whatever the caller still needs to provide to create/resume a session
+ * (`workingDirectory`, `model` override via provider config, etc) --
+ * anything `_createConfig()` derives is excluded at the type level so it
+ * can never be supplied out of band (mirrors `HardenedSessionBaseConfig`).
+ */
+export type SessionWrapperBaseConfig = Omit<SessionConfig, ConfigOwnedKeys>;
 
 /**
  * Maps a built-in tool's wire name (as passed to `addTools`) to the
@@ -108,11 +127,11 @@ function mergeToolUsageIntoSystemMessage(
  * imports from or into `hardenedSession.ts`, and nothing in production
  * wires to it yet.
  *
- * Private state, builder-style mutators (SYS-REQ-027, 027a, 027a-1), and
- * config derivation (`_createConfig()`, SYS-REQ-027b/h/i/j) live here. The
- * create/resume lifecycle (`sendAndWait()`, SYS-REQ-027c/d) and post-start
- * mutator behavior (SYS-REQ-027f) are still out of scope and tracked in
- * separate issues -- nothing below calls `_createConfig()` yet.
+ * Private state, builder-style mutators (SYS-REQ-027, 027a, 027a-1), config
+ * derivation (`_createConfig()`, SYS-REQ-027b/h/i/j), and the create/resume
+ * lifecycle (`sendAndWait()`, SYS-REQ-027c/d) all live here. Post-start
+ * mutator behavior (SYS-REQ-027f) is still out of scope and tracked in a
+ * separate issue.
  */
 export class SessionWrapper {
   /**
@@ -131,6 +150,26 @@ export class SessionWrapper {
   private _systemPrompt: SessionConfig['systemMessage'] | undefined = undefined;
 
   private _modelName: string | undefined = undefined;
+
+  /**
+   * The live SDK session backing this wrapper, once `sendAndWait()` has been
+   * called at least once. `undefined` here (rather than a stored
+   * `sessionId`) is precisely what tells `sendAndWait()` to create instead
+   * of resume (SYS-REQ-027c).
+   */
+  private _session: CopilotSession | undefined = undefined;
+
+  /**
+   * `_client` is optional at construction so existing `_createConfig()`-only
+   * tests/call sites (which never call `sendAndWait`) don't need to supply
+   * one; `sendAndWait()` throws immediately if it's missing (SYS-REQ-027f
+   * spirit: an explicitly-defined failure rather than a null-deref deep
+   * inside the SDK call).
+   */
+  constructor(
+    private readonly _client?: CopilotClient,
+    private readonly _baseConfig: SessionWrapperBaseConfig = {}
+  ) {}
 
   /**
    * Adds one or more tools to the session's tool list. Builder-style: only
@@ -173,10 +212,9 @@ export class SessionWrapper {
    * all computed here from the same `_tools` snapshot, so they cannot
    * independently drift from one another (SYS-REQ-027h).
    *
-   * Called fresh at the start of every turn (by `sendAndWait`, tracked in a
-   * separate issue) -- never cached -- so a tool removed via `removeTools`
-   * is denied starting next turn without needing any other bookkeeping
-   * (SYS-REQ-027j).
+   * Called fresh at the start of every turn (by `sendAndWait`, below) --
+   * never cached -- so a tool removed via `removeTools` is denied starting
+   * next turn without needing any other bookkeeping (SYS-REQ-027j).
    */
   _createConfig(): Pick<SessionConfig, 'availableTools' | 'tools' | 'systemMessage' | 'model'> & {
     autoApproveAll: false;
@@ -216,5 +254,36 @@ export class SessionWrapper {
         };
       },
     };
+  }
+
+  /**
+   * Owns the full session lifecycle (SYS-REQ-027c): derives a fresh config
+   * via `_createConfig()`, then decides internally whether to create a new
+   * SDK session or resume the one this instance already owns -- a decision
+   * invisible to the caller, who always gets back the same
+   * `AssistantMessageEvent | undefined` shape `CopilotSession.sendAndWait`
+   * itself returns.
+   *
+   * Re-derives config from current instance state on every call, including
+   * resumes (SYS-REQ-027d): nothing here is cached from a prior
+   * `sendAndWait()` call, so mutating tools/system prompt/model between
+   * calls and then resuming reflects the new state, not stale config
+   * (carries forward SYS-REQ-026b's intent -- see issue #208's
+   * systemMessage-drop-on-resume hazard in boundary.ts/AGENTS.md, which
+   * this sidesteps by always re-passing systemMessage explicitly).
+   */
+  async sendAndWait(prompt: string | MessageOptions, timeout?: number): Promise<AssistantMessageEvent | undefined> {
+    if (!this._client) {
+      throw new Error('SessionWrapper.sendAndWait: no CopilotClient was supplied to this instance.');
+    }
+    const config = this._createConfig();
+
+    this._session = this._session
+      ? await this._client.resumeSession(this._session.sessionId, { ...this._baseConfig, ...config })
+      : await this._client.createSession({ ...this._baseConfig, ...config });
+
+    return typeof prompt === 'string'
+      ? this._session.sendAndWait(prompt, timeout)
+      : this._session.sendAndWait(prompt, timeout);
   }
 }
