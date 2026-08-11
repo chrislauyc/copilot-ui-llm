@@ -127,11 +127,11 @@ function mergeToolUsageIntoSystemMessage(
  * imports from or into `hardenedSession.ts`, and nothing in production
  * wires to it yet.
  *
- * Private state, builder-style mutators (SYS-REQ-027, 027a, 027a-1), and
- * config derivation (`_createConfig()`, SYS-REQ-027b/h/i/j) live here. The
- * create/resume lifecycle (`sendAndWait()`, SYS-REQ-027c/d) and post-start
- * mutator behavior (SYS-REQ-027f) are still out of scope and tracked in
- * separate issues -- nothing below calls `_createConfig()` yet.
+ * Private state, builder-style mutators (SYS-REQ-027, 027a, 027a-1), config
+ * derivation (`_createConfig()`, SYS-REQ-027b/h/i/j), and the create/resume
+ * lifecycle (`sendAndWait()`, SYS-REQ-027c/d) all live here. Post-start
+ * mutator behavior (SYS-REQ-027f) is still out of scope and tracked in a
+ * separate issue.
  */
 export class SessionWrapper {
   /**
@@ -212,10 +212,9 @@ export class SessionWrapper {
    * all computed here from the same `_tools` snapshot, so they cannot
    * independently drift from one another (SYS-REQ-027h).
    *
-   * Called fresh at the start of every turn (by `sendAndWait`, tracked in a
-   * separate issue) -- never cached -- so a tool removed via `removeTools`
-   * is denied starting next turn without needing any other bookkeeping
-   * (SYS-REQ-027j).
+   * Called fresh at the start of every turn (by `sendAndWait`, below) --
+   * never cached -- so a tool removed via `removeTools` is denied starting
+   * next turn without needing any other bookkeeping (SYS-REQ-027j).
    */
   _createConfig(): Pick<SessionConfig, 'availableTools' | 'tools' | 'systemMessage' | 'model'> & {
     autoApproveAll: false;
