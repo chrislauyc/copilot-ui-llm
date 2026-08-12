@@ -179,6 +179,40 @@ describe('SessionWrapper._createConfig', () => {
     expect(config.tools).toEqual([]);
   });
 
+  // Regression test for the reviewer's blocking finding on this PR
+  // (SYS-REQ-027h): a custom tool added via `addTool` but removed via the
+  // built-in-shaped `removeTools` -- not its own counterpart `removeTool` --
+  // must not leave `_customTools` stale. Before the fix, this left
+  // `availableTools: []` (derived from `_tools`) disagreeing with
+  // `tools: [tool]` (derived from `_customTools`): a handler-backed tool
+  // still in the SDK-dispatch array despite being absent from the
+  // permission allowlist and system-prompt tool section.
+  it('removeTools also clears a custom tool added via addTool, keeping availableTools/tools/permission in agreement', async () => {
+    const tool = fakeTool('run_gh_command');
+    const wrapper = new SessionWrapper().addTool(tool).removeTools('run_gh_command');
+    const config = wrapper._createConfig();
+
+    expect(config.availableTools).toEqual([]);
+    expect(config.tools).toEqual([]);
+    await expect(
+      config.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
+    ).resolves.toMatchObject({ kind: 'reject' });
+  });
+
+  it('removeTools only removes the named custom tool, leaving other addTool entries and built-ins intact', () => {
+    const keep = fakeTool('submit_clarity_check');
+    const drop = fakeTool('run_gh_command');
+    const wrapper = new SessionWrapper()
+      .addTools('bash')
+      .addTool(keep)
+      .addTool(drop)
+      .removeTools('run_gh_command');
+    const config = wrapper._createConfig();
+
+    expect(config.availableTools).toEqual(['bash', 'submit_clarity_check']);
+    expect(config.tools).toEqual([keep]);
+  });
+
   it('folds tool guidance into an unset system prompt as append mode', () => {
     const config = new SessionWrapper().addTools('bash')._createConfig();
     expect(config.systemMessage?.mode).toBe('append');

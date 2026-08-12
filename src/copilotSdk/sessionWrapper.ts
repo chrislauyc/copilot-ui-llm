@@ -228,10 +228,23 @@ export class SessionWrapper {
    * called after a session has started, never rejected -- takes effect
    * starting the next `_createConfig()` derivation, not the in-flight turn
    * (SYS-REQ-027f, resolved by SYS-REQ-027j).
+   *
+   * Also clears any matching entry from `_customTools` (SYS-REQ-027h): a
+   * name removed here may have been added via `addTool` rather than
+   * `addTools`, and `_createConfig()` derives `availableTools` from `_tools`
+   * but `tools` (the handler-dispatch array) from `_customTools` -- leaving
+   * a stale `_customTools` entry after `_tools` no longer has the name would
+   * let those two derived outputs disagree (a handler-backed tool present
+   * in `tools` but absent from `availableTools`/the permission allowlist),
+   * violating the single-derivation-point invariant `_createConfig()`
+   * exists to guarantee. `removeTool` remains the more explicit way to
+   * remove a custom tool, but `removeTools` must not leave this door open
+   * just because the caller used the built-in-shaped method instead.
    */
   removeTools(...names: readonly string[]): this {
     for (const name of names) {
       this._tools.delete(name);
+      this._customTools.delete(name);
     }
     return this;
   }
