@@ -236,4 +236,62 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       await client.stop();
     }
   });
+
+  // Regression test for a theoretical footgun in BUILTIN_TOOL_PERMISSION_KIND
+  // (sessionWrapper.ts): 'view' and 'grep' both map to permission kind
+  // 'read', and built-in PermissionRequests carry only `kind`, not a tool
+  // name -- so if a bare `kind: 'read'` request ever reached our handler
+  // while only 'view' was added, `allowedKinds` (derived from 'view') would
+  // approve it, wrongly granting 'grep'. This test locks in that the SDK's
+  // own `availableTools` gate is name-based and rejects 'grep' by name
+  // BEFORE any kind-based reasoning is possible -- our handler never sees
+  // a same-kind ambiguous request in practice. If this test ever starts
+  // failing because a same-kind tool call gets approved, that means the SDK
+  // changed how it gates 'availableTools' (or a call site started supplying
+  // a custom PermissionRequest path that skips it) and the kind-collision
+  // gap in `BUILTIN_TOOL_PERMISSION_KIND` has gone from theoretical to real.
+  it('does not approve a same-permission-kind tool ("grep") via kind collision when only "view" is allowed', { timeout: 30000 }, async () => {
+    const snapshotPath = path.resolve(
+      process.cwd(),
+      'src/test/snapshots/session_wrapper/kind_collision_denial.yaml'
+    );
+    await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
+
+    const client = makeClient();
+    await client.start();
+    try {
+      // Deliberately add only 'view', never 'grep' -- both share permission
+      // kind 'read' per BUILTIN_TOOL_PERMISSION_KIND.
+      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTools('view');
+
+      await wrapper.sendAndWait('Search for TODO in notes.txt using grep', 15000);
+
+      // The live SDK must deny 'grep' outright -- not silently approve it
+      // because 'view' (same kind) happens to be allowed.
+      const grepDenied = proxy.requestHistory.some(
+        (r) =>
+          Array.isArray(r.messages) &&
+          r.messages.some(
+            (m: any) =>
+              m.role === 'tool' &&
+              typeof m.content === 'string' &&
+              (m.content.includes("Tool 'grep' does not exist") || m.content.includes('is not permitted under this session'))
+          )
+      );
+      expect(grepDenied).toBe(true);
+
+      // And 'grep' must never have actually executed: no real grep output
+      // (which would include the seeded file's content) should appear.
+      const grepRan = proxy.requestHistory.some(
+        (r) =>
+          Array.isArray(r.messages) &&
+          r.messages.some(
+            (m: any) => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('hello from the real filesystem')
+          )
+      );
+      expect(grepRan).toBe(false);
+    } finally {
+      await client.stop();
+    }
+  });
 });
