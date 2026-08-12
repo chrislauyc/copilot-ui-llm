@@ -52,6 +52,15 @@ function customToolRequest(toolName: string): PermissionRequest {
   return { kind: 'custom-tool', toolName } as PermissionRequest;
 }
 
+function fakeTool(name: string) {
+  return {
+    name,
+    description: `fake tool ${name}`,
+    parameters: {},
+    handler: vi.fn(async () => 'ok'),
+  };
+}
+
 describe('SessionWrapper._createConfig', () => {
   it('with zero tools: denies every candidate and reports no availableTools', async () => {
     const wrapper = new SessionWrapper();
@@ -122,6 +131,52 @@ describe('SessionWrapper._createConfig', () => {
     await expect(nextTurnConfig.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toMatchObject({
       kind: 'reject',
     });
+  });
+
+  it('addTool: availableTools, tools array, and permission for the custom tool never disagree', async () => {
+    const tool = fakeTool('run_gh_command');
+    const wrapper = new SessionWrapper().addTool(tool);
+    const config = wrapper._createConfig();
+
+    expect(config.availableTools).toEqual(['run_gh_command']);
+    expect(config.tools).toEqual([tool]);
+    expect(config.systemMessage?.content).toContain('run_gh_command');
+    await expect(
+      config.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
+    ).resolves.toEqual({ kind: 'approve-once' });
+  });
+
+  it('addTool alongside built-ins: both show up in availableTools and tools carries only the handler-backed one', () => {
+    const tool = fakeTool('submit_clarity_check');
+    const wrapper = new SessionWrapper().addTools('bash', 'view').addTool(tool);
+    const config = wrapper._createConfig();
+
+    expect(config.availableTools).toEqual(['bash', 'view', 'submit_clarity_check']);
+    expect(config.tools).toEqual([tool]);
+  });
+
+  it('removeTool denies the custom tool once _createConfig is re-derived (next-turn semantics)', async () => {
+    const tool = fakeTool('run_gh_command');
+    const wrapper = new SessionWrapper().addTool(tool);
+    const firstTurnConfig = wrapper._createConfig();
+    await expect(
+      firstTurnConfig.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
+    ).resolves.toEqual({ kind: 'approve-once' });
+
+    wrapper.removeTool('run_gh_command');
+    const nextTurnConfig = wrapper._createConfig();
+    expect(nextTurnConfig.availableTools).toEqual([]);
+    expect(nextTurnConfig.tools).toEqual([]);
+    await expect(
+      nextTurnConfig.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
+    ).resolves.toMatchObject({ kind: 'reject' });
+  });
+
+  it('removeTool on a name never added is a no-op', () => {
+    const wrapper = new SessionWrapper().addTools('bash').removeTool('never_added');
+    const config = wrapper._createConfig();
+    expect(config.availableTools).toEqual(['bash']);
+    expect(config.tools).toEqual([]);
   });
 
   it('folds tool guidance into an unset system prompt as append mode', () => {
@@ -195,6 +250,20 @@ describe('SessionWrapper.sendAndWait', () => {
     await wrapper.sendAndWait('turn two');
 
     expect(resumeCalls[0]?.config.availableTools).toEqual(['bash']);
+  });
+
+  it('addTool called after the session has started is never rejected and the handler-backed tool applies next turn (SYS-REQ-027f)', async () => {
+    const { client, createCalls, resumeCalls } = fakeClient();
+    const tool = fakeTool('run_gh_command');
+    const wrapper = new SessionWrapper(client).setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    expect(() => wrapper.addTool(tool)).not.toThrow();
+    await wrapper.sendAndWait('turn two');
+
+    expect(createCalls[0]?.tools).toEqual([]);
+    expect(resumeCalls[0]?.config.tools).toEqual([tool]);
+    expect(resumeCalls[0]?.config.availableTools).toEqual(['run_gh_command']);
   });
 
   it('setSystemPrompt called after the session has started is never rejected and applies next turn (SYS-REQ-027f)', async () => {
@@ -306,7 +375,15 @@ describe('SessionWrapper side-door surface (SYS-REQ-027g)', () => {
     // Enumerates the intended public API. If a `registerSessionPolicy`-style
     // side door is ever added, this list must grow to match it -- catching
     // that as a deliberate, reviewable diff rather than a silent addition.
-    const allowedPublicMethods = new Set(['addTools', 'removeTools', 'setSystemPrompt', 'setModelName', 'sendAndWait']);
+    const allowedPublicMethods = new Set([
+      'addTools',
+      'removeTools',
+      'addTool',
+      'removeTool',
+      'setSystemPrompt',
+      'setModelName',
+      'sendAndWait',
+    ]);
     // `_createConfig` is intentionally public (tests call it directly) but is
     // a pure derivation from own state, not an adoption mechanism -- excluded
     // from `allowedPublicMethods` on purpose so it's visible here as the one

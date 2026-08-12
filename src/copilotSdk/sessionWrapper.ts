@@ -6,6 +6,7 @@ import {
   PermissionRequest,
   PermissionRequestResult,
   SessionConfig,
+  Tool,
 } from './boundary';
 
 /** Config fields callers must NOT supply themselves -- always derived by `_createConfig()`. */
@@ -173,6 +174,16 @@ export class SessionWrapper {
    */
   private _tools: Set<string> = new Set();
 
+  /**
+   * Handler-backed tools this instance owns (SYS-REQ-027a, this issue).
+   * Stored separately from `_tools` (wire names only, `Set<string>`)
+   * because a `Tool` carries a handler and other SDK-dispatch fields that
+   * `_tools` has no room for. Keyed by name so `addTool`/`removeTool`
+   * mirror `addTools`/`removeTools`'s builder shape -- add is idempotent
+   * per name, remove is a no-op if the name isn't present.
+   */
+  private _customTools: Map<string, Tool> = new Map();
+
   private _systemPrompt: SessionConfig['systemMessage'] | undefined = undefined;
 
   private _modelName: string | undefined = undefined;
@@ -226,6 +237,38 @@ export class SessionWrapper {
   }
 
   /**
+   * Attaches a handler-backed custom `Tool` this session owns from
+   * creation (this issue; not the #327 `registerSessionPolicy` side door --
+   * this takes a `Tool` this instance is given directly, never a
+   * `sessionId` or externally-created session). Builder-style, mirroring
+   * `addTools`: adds `tool.name` to the SDK-level allowlist (`_tools`,
+   * SYS-REQ-027h membership) and stores the handler-backed `Tool` itself so
+   * `_createConfig()` can include it in the derived `tools` array. If
+   * called after a session has started, never rejected -- takes effect
+   * starting the next `_createConfig()` derivation, not the in-flight turn
+   * (SYS-REQ-027f, resolved by SYS-REQ-027j).
+   */
+  addTool(tool: Tool): this {
+    this._tools.add(tool.name);
+    this._customTools.set(tool.name, tool);
+    return this;
+  }
+
+  /**
+   * Removes a handler-backed custom tool previously added via `addTool`.
+   * The counterpart builder-style mutator to `addTool`, mirroring
+   * `removeTools`. A no-op if `name` was never added. If called after a
+   * session has started, never rejected -- takes effect starting the next
+   * `_createConfig()` derivation, not the in-flight turn (SYS-REQ-027f,
+   * resolved by SYS-REQ-027j).
+   */
+  removeTool(name: string): this {
+    this._tools.delete(name);
+    this._customTools.delete(name);
+    return this;
+  }
+
+  /**
    * Replaces the session's system prompt (SYS-REQ-027a). If called after a
    * session has started, never rejected -- takes effect starting the next
    * `_createConfig()` derivation, not the in-flight turn (SYS-REQ-027f,
@@ -273,10 +316,12 @@ export class SessionWrapper {
 
     return {
       availableTools: tools as SessionConfig['availableTools'],
-      // No custom tool handlers are registered on this instance today --
-      // `_tools` holds wire names only (SYS-REQ-027a-1's built-ins). Extend
-      // this once SessionWrapper grows a way to attach a handler per name.
-      tools: [] as SessionConfig['tools'],
+      // Handler-backed tools added via `addTool` -- `_tools` (above) holds
+      // the wire-name allowlist for all tools including these, while
+      // `_customTools` holds the actual `Tool` objects (with handlers) so
+      // the SDK can dispatch calls to them. Re-read fresh every call, same
+      // as `_tools` itself (SYS-REQ-027j).
+      tools: [...this._customTools.values()] as SessionConfig['tools'],
       systemMessage: mergeToolUsageIntoSystemMessage(buildToolUsageSection(tools), this._systemPrompt),
       model: this._modelName,
       autoApproveAll: false,
