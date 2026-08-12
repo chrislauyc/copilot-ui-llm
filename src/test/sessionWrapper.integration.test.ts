@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { CapiProxy } from './harness/CapiProxy';
-import { CopilotClient } from '../copilotSdk/boundary';
+import { CopilotClient, defineTool } from '../copilotSdk/boundary';
 import { SessionWrapper } from '../copilotSdk/sessionWrapper';
 
 // Exercises SessionWrapper (src/copilotSdk/sessionWrapper.ts) against a REAL
@@ -58,6 +58,30 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
         apiKey: 'test-api-key',
       },
     });
+  }
+
+  // Handler-backed custom Tool for issue #345 coverage: reads the real
+  // seeded file from tmpWorkDir, so a successful dispatch produces output
+  // ("hello from the real filesystem") that couldn't appear unless the SDK
+  // actually invoked this handler -- the same "real output leaked/didn't
+  // leak" signal the built-in `view` tests use for `addTools`/`removeTools`.
+  function makeEchoNotesTool() {
+    let callCount = 0;
+    const tool = defineTool(
+      'echo_notes',
+      'Echoes the contents of a text file in the working directory.',
+      {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+      async (args: unknown) => {
+        callCount++;
+        const { path: relPath } = args as { path: string };
+        return fs.readFileSync(path.join(tmpWorkDir, relPath), 'utf8');
+      }
+    );
+    return { tool, getCallCount: () => callCount };
   }
 
   // Scope item 1 (SYS-REQ-027c): session create/resume round trip. Confirms
@@ -290,6 +314,112 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
           )
       );
       expect(grepRan).toBe(false);
+    } finally {
+      await client.stop();
+    }
+  });
+
+  // Issue #345, scope item 1: a handler-backed custom Tool added via
+  // `addTool` is (a) offered to the model in `availableTools`/the derived
+  // tool-usage system-prompt section on the same footing as a built-in, and
+  // (b) actually dispatched by the live SDK -- not just auto-approved in
+  // isolation. Mirrors `tool_permission_allowed.yaml`'s structure/assertions
+  // ("lets a real model turn call an allowed tool...") but with
+  // `addTool(customTool)` instead of `addTools('view')`.
+  it('lets a real model turn call a custom handler-backed tool, and the SDK actually executes it', { timeout: 30000 }, async () => {
+    const snapshotPath = path.resolve(
+      process.cwd(),
+      'src/test/snapshots/session_wrapper/custom_tool_permission_allowed.yaml'
+    );
+    await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
+
+    const client = makeClient();
+    await client.start();
+    try {
+      const { tool: echoNotesTool, getCallCount } = makeEchoNotesTool();
+      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTool(echoNotesTool);
+
+      const result = await wrapper.sendAndWait('Check notes.txt with the custom tool', 15000);
+      expect(result).toBeTruthy();
+
+      // Our handler itself was actually invoked by the SDK, not just
+      // approved -- callCount is only incremented inside the handler.
+      expect(getCallCount()).toBeGreaterThanOrEqual(1);
+
+      // And its real output made it back into a follow-up completion, the
+      // same signal `tool_permission_allowed` uses for `view`: a hand-mocked
+      // session double can approve a permission request without the SDK
+      // ever actually wiring the handler's return value into the next
+      // request, so this is the part that proves end-to-end dispatch.
+      const toolResultSent = proxy.requestHistory.some(
+        (r) =>
+          Array.isArray(r.messages) &&
+          r.messages.some(
+            (m: any) => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('hello from the real filesystem')
+          )
+      );
+      expect(toolResultSent).toBe(true);
+    } finally {
+      await client.stop();
+    }
+  });
+
+  // Issue #345, scope item 2 (resume-scope case): a custom tool added
+  // before one `sendAndWait()` and removed via `removeTool` before the next
+  // is actually denied on the live SDK on the second call -- mirroring
+  // `removeTools_denial.yaml`'s assertions (rejection message seen, the
+  // handler's real output never leaked) but for a handler-backed tool
+  // instead of a built-in.
+  it('rejects a real call to a custom tool removed before resume', { timeout: 30000 }, async () => {
+    const snapshotPath = path.resolve(
+      process.cwd(),
+      'src/test/snapshots/session_wrapper/custom_tool_removeTool_denial.yaml'
+    );
+    await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
+
+    const client = makeClient();
+    await client.start();
+    try {
+      const { tool: echoNotesTool, getCallCount } = makeEchoNotesTool();
+      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTool(echoNotesTool);
+
+      // Turn 1: 'echo_notes' is allowed but the scripted turn doesn't call it yet.
+      await wrapper.sendAndWait('Stand by', 15000);
+
+      // Remove the custom tool, then resume with a turn that tries to call it.
+      wrapper.removeTool('echo_notes');
+      await wrapper.sendAndWait('Check notes.txt with the custom tool again', 15000);
+
+      // The handler itself must never have run post-removal.
+      expect(getCallCount()).toBe(0);
+
+      // The live SDK must actually deny the call -- either via our
+      // `onPermissionRequest` handler's exact reject feedback, or (as with
+      // the built-in `removeTools_denial` case) the SDK's own "tool does
+      // not exist" message once the name drops out of `availableTools`.
+      const rejectionSeen = proxy.requestHistory.some(
+        (r) =>
+          Array.isArray(r.messages) &&
+          r.messages.some(
+            (m: any) =>
+              m.role === 'tool' &&
+              typeof m.content === 'string' &&
+              (m.content.includes("'echo_notes' is not permitted under this session") || m.content.includes('does not exist'))
+          )
+      );
+      expect(rejectionSeen).toBe(true);
+
+      // And the handler's real output must never have leaked into any
+      // request -- proof the removal was enforced, not just that our
+      // handler was never *asked* to run.
+      const realFileLeaked = proxy.requestHistory.some(
+        (r) =>
+          Array.isArray(r.messages) &&
+          r.messages.some(
+            (m: any) => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('hello from the real filesystem')
+          )
+      );
+      expect(realFileLeaked).toBe(false);
     } finally {
       await client.stop();
     }
