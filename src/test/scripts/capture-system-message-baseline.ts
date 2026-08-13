@@ -8,13 +8,22 @@
  * (see the comment on FROZEN_SDK_SYSTEM_MESSAGE_BASELINE for why those two
  * are cut rather than templated).
  *
- * Usage: npx tsx scripts/capture-system-message-baseline.ts
+ * Lives under src/test/ (rather than scripts/) and is deliberately named
+ * without a `.test.ts` suffix: it exercises `CopilotClient.createSession`
+ * directly against a real (proxied) SDK on purpose (see the comment on
+ * that call below), which is exactly what src/test/**'s integration-test
+ * files are already trusted to do, so it belongs alongside them rather
+ * than under scripts/, whose lint rule assumes production call sites. The
+ * `.ts` (not `.test.ts`) extension keeps `vitest run` from picking it up
+ * as a suite -- it's a manual, human-triggered capture, not a test.
+ *
+ * Usage: npx tsx src/test/scripts/capture-system-message-baseline.ts
  */
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { CapiProxy } from '../src/test/harness/CapiProxy';
-import { CopilotClient } from '../src/copilotSdk/boundary';
+import { CapiProxy } from '../harness/CapiProxy';
+import { CopilotClient } from '../../copilotSdk/boundary';
 
 async function main() {
   const proxy = new CapiProxy();
@@ -23,7 +32,7 @@ async function main() {
 
   const snapshotPath = path.resolve(
     __dirname,
-    '../src/test/snapshots/session_wrapper/create_resume.yaml'
+    '../snapshots/session_wrapper/create_resume.yaml'
   );
   await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 

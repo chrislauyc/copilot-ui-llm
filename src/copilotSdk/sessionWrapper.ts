@@ -390,9 +390,21 @@ export class SessionWrapper {
    * all computed here from the same `_tools` snapshot, so they cannot
    * independently drift from one another (SYS-REQ-027h).
    *
-   * Called fresh at the start of every turn (by `sendAndWait`, below) --
-   * never cached -- so a tool removed via `removeTools` is denied starting
-   * next turn without needing any other bookkeeping (SYS-REQ-027j).
+   * Called fresh at the start of every turn (by `sendAndWait`, below) for
+   * `availableTools`/`tools`/permission handling, so a tool removed via
+   * `removeTools` is denied starting next turn without needing any other
+   * bookkeeping (SYS-REQ-027j).
+   *
+   * `systemMessage` is the one exception: once a session exists,
+   * `_frozenSystemMessage` (set by `sendAndWait` on creation) is returned
+   * as-is rather than re-derived. Without this, a caller inspecting
+   * `_createConfig()`'s output after the session has started -- tests, or
+   * anything reading the config for logging/assertions -- would see a
+   * freshly-recomputed `systemMessage` reflecting current tools/prompt,
+   * while `sendAndWait` actually sends the *frozen* one on resume
+   * (SYS-REQ-027k). That mismatch is exactly the footgun this guards
+   * against: `_createConfig()`'s return value must always match what's
+   * really in flight, never a preview of what a fresh derivation would be.
    */
   _createConfig(): Pick<SessionConfig, 'availableTools' | 'tools' | 'systemMessage' | 'model'> & {
     autoApproveAll: false;
@@ -415,7 +427,12 @@ export class SessionWrapper {
       // the SDK can dispatch calls to them. Re-read fresh every call, same
       // as `_tools` itself (SYS-REQ-027j).
       tools: [...this._customTools.values()] as SessionConfig['tools'],
-      systemMessage: buildFrozenReplaceSystemMessage(buildToolUsageSection(tools), this._systemPrompt),
+      // Frozen once a session exists (see the doc comment above) -- only
+      // ever recomputed for the pre-creation call whose result becomes that
+      // frozen value in the first place.
+      systemMessage:
+        this._frozenSystemMessage ??
+        buildFrozenReplaceSystemMessage(buildToolUsageSection(tools), this._systemPrompt),
       model: this._modelName,
       autoApproveAll: false,
       onPermissionRequest: async (
