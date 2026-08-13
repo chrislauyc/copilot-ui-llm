@@ -420,6 +420,93 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
           )
       );
       expect(realFileLeaked).toBe(false);
+
+      // Also assert on the tool-usage system-prompt section itself
+      // (buildToolUsageSection in sessionWrapper.ts), the same way
+      // resume_rederivation's test does for built-ins -- removal must be
+      // reflected in the re-derived prompt, not just enforced at the
+      // permission layer. Since 'echo_notes' was the only tool this
+      // instance ever had, removing it drops the derived tool list to
+      // empty, which flips buildToolUsageSection to its other branch
+      // entirely ("No tools are available...") rather than just shrinking
+      // the same "Only the following tools may be called: ..." sentence --
+      // so the first turn's tool-usage prefix must NOT still be present on
+      // the second turn.
+      const completions = proxy.requestHistory.filter((r) => Array.isArray(r.messages));
+      expect(completions.length).toBeGreaterThanOrEqual(2);
+      const firstSystem = completions[0].messages.find((m: any) => m.role === 'system')?.content ?? '';
+      const secondSystem = completions[1].messages.find((m: any) => m.role === 'system')?.content ?? '';
+
+      expect(firstSystem).toContain('Only the following tools may be called: echo_notes.');
+      expect(secondSystem).not.toContain('Only the following tools may be called: echo_notes.');
+      expect(secondSystem).toContain('No tools are available in this session. Do not attempt to call any tool.');
+    } finally {
+      await client.stop();
+    }
+  });
+
+  // Issue #345, cross-method regression coverage for the reviewer's
+  // blocking finding on this PR: `removeTools()` -- the built-in-shaped
+  // mutator, not its own counterpart `removeTool()` -- must also clear a
+  // custom tool added via `addTool`, keeping `availableTools`, `tools`, and
+  // the tool-usage system-prompt section in agreement on the live SDK
+  // (SYS-REQ-027h). Mirrors the test above but removes via `removeTools`.
+  it('rejects a real call to a custom tool removed via removeTools before resume, and the tool-usage prompt reflects it', { timeout: 30000 }, async () => {
+    const snapshotPath = path.resolve(
+      process.cwd(),
+      'src/test/snapshots/session_wrapper/custom_tool_removeTool_denial.yaml'
+    );
+    await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
+
+    const client = makeClient();
+    await client.start();
+    try {
+      const { tool: echoNotesTool, getCallCount } = makeEchoNotesTool();
+      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTool(echoNotesTool);
+
+      await wrapper.sendAndWait('Stand by', 15000);
+
+      // The reviewer's exact repro: remove a custom tool via removeTools(),
+      // not removeTool().
+      wrapper.removeTools('echo_notes');
+      await wrapper.sendAndWait('Check notes.txt with the custom tool again', 15000);
+
+      expect(getCallCount()).toBe(0);
+
+      const rejectionSeen = proxy.requestHistory.some(
+        (r) =>
+          Array.isArray(r.messages) &&
+          r.messages.some(
+            (m: any) =>
+              m.role === 'tool' &&
+              typeof m.content === 'string' &&
+              (m.content.includes("'echo_notes' is not permitted under this session") || m.content.includes('does not exist'))
+          )
+      );
+      expect(rejectionSeen).toBe(true);
+
+      const realFileLeaked = proxy.requestHistory.some(
+        (r) =>
+          Array.isArray(r.messages) &&
+          r.messages.some(
+            (m: any) => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('hello from the real filesystem')
+          )
+      );
+      expect(realFileLeaked).toBe(false);
+
+      // Same prefix check as the removeTool() case above -- proves
+      // _customTools was actually cleared by removeTools(), not just
+      // _tools, since a stale _customTools entry wouldn't change what
+      // availableTools/the prompt derive from, but WOULD still show up in
+      // the derived `tools` dispatch array (the bug the reviewer flagged).
+      const completions = proxy.requestHistory.filter((r) => Array.isArray(r.messages));
+      expect(completions.length).toBeGreaterThanOrEqual(2);
+      const firstSystem = completions[0].messages.find((m: any) => m.role === 'system')?.content ?? '';
+      const secondSystem = completions[1].messages.find((m: any) => m.role === 'system')?.content ?? '';
+
+      expect(firstSystem).toContain('Only the following tools may be called: echo_notes.');
+      expect(secondSystem).not.toContain('Only the following tools may be called: echo_notes.');
+      expect(secondSystem).toContain('No tools are available in this session. Do not attempt to call any tool.');
     } finally {
       await client.stop();
     }
