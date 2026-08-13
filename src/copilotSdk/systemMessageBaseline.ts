@@ -33,7 +33,37 @@
  * tying this constant to the installed SDK version; bumping
  * `@github/copilot-sdk` must include re-running the capture script and
  * diffing this constant by hand.
+ *
+ * That staleness is no longer purely manual, though:
+ * sessionWrapper.integration.test.ts's "does not drift from the installed
+ * SDK's own baseline" case re-derives this same comparison in CI, on every
+ * run, against whatever `@github/copilot-sdk` version is actually
+ * installed -- using `stripSdkGeneratedDynamicSections` below so the two
+ * places (this constant, that test) share one definition of which two
+ * sections are expected to differ, instead of the test hand-rolling its
+ * own copy of that knowledge. A real SDK prompt change now fails that test
+ * immediately rather than sitting undetected until someone happens to
+ * re-run the capture script by hand.
  */
+
+/**
+ * Strips the two dynamic, per-session sections (see above) out of a raw
+ * system-message capture, exactly as they were cut when
+ * `FROZEN_SDK_SYSTEM_MESSAGE_BASELINE` was hand-captured: each tag pair is
+ * removed along with the one trailing newline directly after its closing
+ * tag, leaving everything else -- including the blank line(s) already
+ * before the tag -- untouched. This precise shape (not a generic
+ * "collapse whitespace" strip) is what makes a stripped fresh capture
+ * byte-identical to this file's constant when the SDK's baseline hasn't
+ * changed; shared by the capture script and the staleness test so both
+ * stay in lockstep with each other.
+ */
+export function stripSdkGeneratedDynamicSections(raw: string): string {
+  return raw
+    .replace(/<environment_context>[\s\S]*?<\/environment_context>\n/, '')
+    .replace(/<session_context>[\s\S]*?<\/session_context>\n/, '');
+}
+
 export const FROZEN_SDK_SYSTEM_MESSAGE_BASELINE = `You are the GitHub Copilot CLI, a terminal assistant built by GitHub. You are an interactive CLI tool that helps users with software engineering tasks.
 
 # Tone and style

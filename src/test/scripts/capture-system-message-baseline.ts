@@ -22,8 +22,13 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { fileURLToPath } from 'url';
 import { CapiProxy } from '../harness/CapiProxy';
 import { CopilotClient } from '../../copilotSdk/boundary';
+import { stripSdkGeneratedDynamicSections } from '../../copilotSdk/systemMessageBaseline';
+
+// ESM (package.json "type": "module") has no ambient __dirname.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   const proxy = new CapiProxy();
@@ -65,7 +70,14 @@ async function main() {
     const sys = completions[0]?.messages.find((m: any) => m.role === 'system')?.content ?? '';
     const outPath = path.join(os.tmpdir(), 'copilot-sdk-system-message-capture.txt');
     fs.writeFileSync(outPath, sys);
+    // Same shared stripper the staleness test uses -- printed here too so a
+    // human re-running this by hand sees the exact text that test compares
+    // against `FROZEN_SDK_SYSTEM_MESSAGE_BASELINE`, not the raw unstripped
+    // capture.
+    const strippedOutPath = path.join(os.tmpdir(), 'copilot-sdk-system-message-capture.stripped.txt');
+    fs.writeFileSync(strippedOutPath, stripSdkGeneratedDynamicSections(sys));
     console.log('Captured', sys.length, 'chars to', outPath);
+    console.log('Stripped capture written to', strippedOutPath);
   } finally {
     await client.stop();
     await proxy.stop();

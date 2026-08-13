@@ -5,6 +5,10 @@ import * as os from 'os';
 import { CapiProxy } from './harness/CapiProxy';
 import { CopilotClient, defineTool } from '../copilotSdk/boundary';
 import { SessionWrapper } from '../copilotSdk/sessionWrapper';
+import {
+  FROZEN_SDK_SYSTEM_MESSAGE_BASELINE,
+  stripSdkGeneratedDynamicSections,
+} from '../copilotSdk/systemMessageBaseline';
 
 // Exercises SessionWrapper (src/copilotSdk/sessionWrapper.ts) against a REAL
 // CopilotClient/CopilotSession talking to the CapiProxy harness described in
@@ -115,7 +119,47 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     }
   });
 
-  // Scope item 2 (SYS-REQ-027h): tool-permission enforcement end-to-end. A
+  // Staleness guard for FROZEN_SDK_SYSTEM_MESSAGE_BASELINE (see the doc
+  // comment on that constant in systemMessageBaseline.ts). Bypasses
+  // SessionWrapper entirely and drives `CopilotClient.createSession`
+  // directly with the SDK's default (non-`replace`) `systemMessage`, zero
+  // tools -- i.e. reproduces exactly what
+  // src/test/scripts/capture-system-message-baseline.ts captures by hand --
+  // then asserts the first history entry's system message, once the two
+  // per-session dynamic sections are stripped, is byte-identical to the
+  // frozen constant SessionWrapper builds `replace`-mode prompts on top of.
+  // A real `@github/copilot-sdk` upgrade that changes its own baseline
+  // prompt fails this test immediately instead of silently drifting until
+  // someone re-runs the capture script by hand.
+  it("does not drift from the installed SDK's own baseline system message", { timeout: 30000 }, async () => {
+    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/session_wrapper/create_resume.yaml');
+    await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
+
+    const client = makeClient();
+    await client.start();
+    try {
+      const session = await client.createSession({
+        model: 'claude-sonnet-4.5',
+        provider: { type: 'openai', baseUrl: proxyUrl, apiKey: 'test-api-key' },
+        availableTools: [],
+        autoApproveAll: false,
+        onPermissionRequest: async () => ({ kind: 'reject', feedback: 'no tools' }),
+      } as Parameters<typeof client.createSession>[0]);
+
+      await session.sendAndWait('Hello', 15000);
+
+      // The first history entry (create, not resume) is what
+      // `FROZEN_SDK_SYSTEM_MESSAGE_BASELINE` was originally captured from.
+      const completions = proxy.requestHistory.filter((r) => Array.isArray(r.messages));
+      const firstSystemMessage = completions[0]?.messages.find((m: any) => m.role === 'system')?.content ?? '';
+
+      expect(stripSdkGeneratedDynamicSections(firstSystemMessage)).toBe(FROZEN_SDK_SYSTEM_MESSAGE_BASELINE);
+    } finally {
+      await client.stop();
+    }
+  });
+
+
   // tool present in `_tools` is exposed to the model; when the model calls
   // it, we confirm the SDK actually executes it (i.e. the SDK invoked our
   // `onPermissionRequest` with a shape our handler could resolve, and honored
