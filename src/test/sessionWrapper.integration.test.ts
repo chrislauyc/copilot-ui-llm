@@ -157,18 +157,16 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   // the tool-list/system-prompt mutation instead shows up as (a) the
   // re-derived `availableTools`/permission outcome, still fully live per
   // turn, and (b) an update notice appended to the SECOND request's user
-  // turn. This test used to assert the opposite (systemMessage itself
-  // changing between requests) before #345; see git history for the
-  // pre-fix version and NOTE below re: snapshot regeneration.
+  // turn.
   //
-  // NOTE: `resume_rederivation.yaml` was recorded against the pre-#345
-  // request shape (systemMessage changing between turns). Now that the
-  // second request's systemMessage is frozen and its user turn carries an
-  // appended notice instead, the outgoing request body no longer matches
-  // what was recorded. The snapshot must be re-recorded against a live CAPI
-  // endpoint (this sandbox has no network path to one) before this test can
-  // pass again -- the assertions below encode the intended post-#345
-  // contract for whoever re-records it.
+  // `resume_rederivation.yaml` (like every snapshot in this directory) is a
+  // hand-authored script for the CapiProxy harness, not a capture of a real
+  // model's output: it only encodes `role` sequence and scripted `assistant`
+  // replies, and CapiProxy's matcher (see CapiProxy.ts) treats `${system}`/
+  // `${user}` as wildcards that skip content matching entirely. It has no
+  // dependency on what SessionWrapper actually puts in `systemMessage`, so
+  // it needs no update -- and no live CAPI endpoint, ever -- when that
+  // content's shape changes, including the #345 fix this test exercises.
   it('freezes systemMessage across resume; tool/prompt mutations surface via availableTools and an appended notice instead', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
@@ -182,11 +180,11 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       const wrapper = makeWrapper(client)
         .setModelName('claude-sonnet-4.5')
         .addTools('bash')
-        .setSystemPrompt({ mode: 'append', content: 'Initial prompt marker.' });
+        .setSystemPrompt('Initial prompt marker.');
 
       await wrapper.sendAndWait('Status check', 15000);
 
-      wrapper.removeTools('bash').addTools('view').setSystemPrompt({ mode: 'append', content: 'Updated prompt marker.' });
+      wrapper.removeTools('bash').addTools('view').setSystemPrompt('Updated prompt marker.');
 
       await wrapper.sendAndWait('Status check', 15000);
 

@@ -217,13 +217,14 @@ describe('SessionWrapper._createConfig', () => {
     expect(config.tools).toEqual([keep]);
   });
 
-  it('folds tool guidance into an unset system prompt as append mode', () => {
+  it('forces systemMessage into replace mode even with no caller-supplied system prompt (issue #345 follow-up: append/customize modes still let the SDK inject a live-tool-derived section)', () => {
     const config = new SessionWrapper().addTools('bash')._createConfig();
-    expect(config.systemMessage?.mode).toBe('append');
+    expect(config.systemMessage?.mode).toBe('replace');
+    expect(config.systemMessage?.content).toContain('bash');
   });
 
-  it('folds tool guidance into a caller-supplied replace-mode system prompt without dropping caller content', () => {
-    const wrapper = new SessionWrapper().addTools('bash').setSystemPrompt({ mode: 'replace', content: 'be terse' });
+  it('folds tool guidance into a caller-supplied system prompt without dropping caller content, still forced into replace mode', () => {
+    const wrapper = new SessionWrapper().addTools('bash').setSystemPrompt('be terse');
     const config = wrapper._createConfig();
     expect(config.systemMessage?.mode).toBe('replace');
     expect(config.systemMessage?.content).toContain('be terse');
@@ -255,7 +256,7 @@ describe('SessionWrapper.sendAndWait', () => {
     const { client, createCalls, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client)
       .addTools('bash', 'view')
-      .setSystemPrompt({ mode: 'append', content: 'be terse' })
+      .setSystemPrompt('be terse')
       .setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
@@ -309,7 +310,7 @@ describe('SessionWrapper.sendAndWait', () => {
     const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
-    expect(() => wrapper.setSystemPrompt({ mode: 'replace', content: 'be terse' })).not.toThrow();
+    expect(() => wrapper.setSystemPrompt('be terse')).not.toThrow();
     await wrapper.sendAndWait('turn two');
 
     // The resumed systemMessage is byte-identical to the create call's --
@@ -366,7 +367,7 @@ describe('SessionWrapper SDK-footgun regression tests', () => {
     const { client, createCalls, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client)
       .addTools('bash')
-      .setSystemPrompt({ mode: 'replace', content: 'be terse' })
+      .setSystemPrompt('be terse')
       .setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
@@ -382,33 +383,32 @@ describe('SessionWrapper SDK-footgun regression tests', () => {
     expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
   });
 
-  it('keeps the whole customize-mode systemMessage byte-identical across a tool-list change (issue #345: any per-turn systemMessage regeneration -- not just per-tool sections -- busts the prompt/KV cache)', async () => {
+  it('always forces systemMessage into replace mode -- no mode/sections choice reaches the SDK -- and stays byte-identical across a tool-list change (issue #345 follow-up: append/customize modes still let the SDK inject a live-tool-derived section, which is exactly what replace mode exists to prevent)', async () => {
     const { client, createCalls, resumeCalls, sessions } = fakeClient();
-    const customizeSections = {
-      identity: { action: 'append' as const, content: 'you are an auditor' },
-    };
     const wrapper = new SessionWrapper(client)
       .addTools('bash')
-      .setSystemPrompt({ mode: 'customize', sections: customizeSections })
+      .setSystemPrompt('you are an auditor')
       .setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     wrapper.addTools('view'); // changes the tool list between calls
     await wrapper.sendAndWait('turn two');
 
-    // #146 was fixed by keeping `sections` untouched and folding tool
-    // guidance into `content` instead -- but content still changed
-    // ('bash' -> 'view'), which still busts the prefix/KV cache. #345's fix
-    // is stricter: the *entire* systemMessage (mode, sections, and content)
-    // must be byte-identical create-to-resume, full stop. The tool-list
-    // change is instead visible in `availableTools` (still re-derived, see
-    // the SYS-REQ-027d test above) and relayed to the model via a notice
-    // appended to the resumed turn's prompt (SYS-REQ-027k).
+    // #345 follow-up: `_createConfig()` no longer offers append/customize at
+    // all -- every session, regardless of what the caller passed to
+    // `setSystemPrompt`, gets `mode: 'replace'` so nothing SDK-managed (in
+    // particular no live-`availableTools`-derived tool_instructions section)
+    // rides along in the outgoing systemMessage. The entire object -- mode
+    // and content -- must still be byte-identical create-to-resume. The
+    // tool-list change is instead visible in `availableTools` (still
+    // re-derived, see the SYS-REQ-027d test above) and relayed to the model
+    // via a notice appended to the resumed turn's prompt (SYS-REQ-027k).
     const created = createCalls[0]?.systemMessage;
     const resumed = resumeCalls[0]?.config.systemMessage;
     expect(resumed).toEqual(created);
-    expect(created?.mode === 'customize' ? created.sections : undefined).toEqual(customizeSections);
-    expect(created?.mode === 'customize' ? created.content : '').toContain('bash');
+    expect(created?.mode).toBe('replace');
+    expect(created?.mode === 'replace' ? created.content : '').toContain('bash');
+    expect(created?.mode === 'replace' ? created.content : '').toContain('you are an auditor');
 
     const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
     const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0];

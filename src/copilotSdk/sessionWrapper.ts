@@ -8,6 +8,7 @@ import {
   SessionConfig,
   Tool,
 } from './boundary';
+import { FROZEN_SDK_SYSTEM_MESSAGE_BASELINE } from './systemMessageBaseline';
 
 /** Config fields callers must NOT supply themselves -- always derived by `_createConfig()`. */
 type ConfigOwnedKeys =
@@ -108,40 +109,34 @@ function buildToolUsageSection(tools: readonly string[]): string {
 }
 
 /**
- * Folds `toolUsageSection` into `systemPrompt` according to its mode, so the
- * tool-usage guidance is present regardless of whether the caller supplied a
- * system prompt at all, or which mode they chose:
- * - undefined / `append`: tool section + caller content, both appended after
- *   the SDK-managed prompt.
- * - `replace`: tool section is folded into `content`, since replace mode
- *   removes the SDK-managed prompt entirely and nothing else would supply it.
- * - `customize`: tool section goes in the mode's own `content` field
- *   (appended after all sections) rather than a per-tool section override --
- *   per-tool section regeneration on `resumeSession` retries invalidates the
- *   prompt/KV cache (issue #146).
+ * Builds the entire outgoing `systemMessage` in the SDK's `replace` mode,
+ * unconditionally (issue #345 follow-up). `append`/`customize` modes still
+ * splice an SDK-managed `tool_instructions` section into the prompt that's
+ * re-derived from the live `availableTools` on every single turn -- that
+ * per-turn regeneration is exactly the KV-cache-prefix hazard #345 exists to
+ * close, and no combination of our own content in those modes can stop the
+ * SDK from doing it. `replace` mode is the only one that hands us the whole
+ * prompt with nothing left for the SDK to inject.
+ *
+ * That means WE now own reproducing the SDK's own baseline guidance
+ * (`FROZEN_SDK_SYSTEM_MESSAGE_BASELINE`, a hand-captured, hand-maintained
+ * copy -- see systemMessageBaseline.ts for what's deliberately excluded from
+ * it and why) rather than getting it "for free" from `append`/`customize`
+ * mode. The tradeoff, called out directly in the SDK's own docs: replace
+ * mode also drops the SDK's built-in guardrail/security sections, which
+ * `FROZEN_SDK_SYSTEM_MESSAGE_BASELINE` does still carry forward as of the
+ * capture date, but it will silently stop tracking any *future* guardrail
+ * the SDK adds until this file's baseline is re-captured.
  */
-function mergeToolUsageIntoSystemMessage(
+function buildFrozenReplaceSystemMessage(
   toolUsageSection: string,
-  systemPrompt: SessionConfig['systemMessage']
+  callerContent: string | undefined
 ): SessionConfig['systemMessage'] {
-  if (!systemPrompt || systemPrompt.mode === undefined || systemPrompt.mode === 'append') {
-    const content = systemPrompt?.content;
-    return {
-      mode: 'append',
-      content: content ? `${toolUsageSection}\n\n${content}` : toolUsageSection,
-    };
+  const parts = [FROZEN_SDK_SYSTEM_MESSAGE_BASELINE, toolUsageSection];
+  if (callerContent) {
+    parts.push(callerContent);
   }
-  if (systemPrompt.mode === 'replace') {
-    return {
-      mode: 'replace',
-      content: `${toolUsageSection}\n\n${systemPrompt.content}`,
-    };
-  }
-  // mode === 'customize'
-  return {
-    ...systemPrompt,
-    content: systemPrompt.content ? `${toolUsageSection}\n\n${systemPrompt.content}` : toolUsageSection,
-  };
+  return { mode: 'replace', content: parts.join('\n\n') };
 }
 
 /**
@@ -158,15 +153,14 @@ function mergeToolUsageIntoSystemMessage(
 function buildSessionUpdateNotice(
   previousTools: readonly string[],
   nextTools: readonly string[],
-  previousSystemPrompt: SessionConfig['systemMessage'],
-  nextSystemPrompt: SessionConfig['systemMessage']
+  previousSystemPrompt: string | undefined,
+  nextSystemPrompt: string | undefined
 ): string | undefined {
   const previousSet = new Set(previousTools);
   const nextSet = new Set(nextTools);
   const added = nextTools.filter((name) => !previousSet.has(name));
   const removed = previousTools.filter((name) => !nextSet.has(name));
-  const systemPromptChanged =
-    JSON.stringify(previousSystemPrompt) !== JSON.stringify(nextSystemPrompt);
+  const systemPromptChanged = previousSystemPrompt !== nextSystemPrompt;
 
   if (added.length === 0 && removed.length === 0 && !systemPromptChanged) {
     return undefined;
@@ -233,7 +227,16 @@ export class SessionWrapper {
    */
   private _customTools: Map<string, Tool> = new Map();
 
-  private _systemPrompt: SessionConfig['systemMessage'] | undefined = undefined;
+  /**
+   * Caller-supplied additional instructions, plain text only. Unlike before
+   * #345's `replace`-mode switch, there is no `mode`/`sections` concept left
+   * to expose here: `_createConfig()` always forces `systemMessage` into the
+   * SDK's `replace` mode (see `buildFrozenReplaceSystemMessage`), so an
+   * `append`/`customize` mode or a `sections` override from the caller would
+   * never reach the SDK -- exposing them here would silently do nothing,
+   * which is worse than not offering them.
+   */
+  private _systemPrompt: string | undefined = undefined;
 
   private _modelName: string | undefined = undefined;
 
@@ -265,7 +268,7 @@ export class SessionWrapper {
    * factor into the diff.
    */
   private _announcedTools: readonly string[] = [];
-  private _announcedSystemPrompt: SessionConfig['systemMessage'] | undefined = undefined;
+  private _announcedSystemPrompt: string | undefined = undefined;
 
   /**
    * `_client` is optional at construction so existing `_createConfig()`-only
@@ -353,13 +356,19 @@ export class SessionWrapper {
   }
 
   /**
-   * Replaces the session's system prompt (SYS-REQ-027a). If called after a
-   * session has started, never rejected -- takes effect starting the next
-   * `_createConfig()` derivation, not the in-flight turn (SYS-REQ-027f,
-   * resolved by SYS-REQ-027j).
+   * Sets the caller's additional operating instructions (SYS-REQ-027a),
+   * appended after the SDK baseline and tool-usage section that
+   * `_createConfig()` always builds first. Plain text only -- as of #345's
+   * `replace`-mode switch there's no `mode`/`sections` for a caller to pick,
+   * since `_createConfig()` always forces the SDK's `replace` mode itself
+   * (see `buildFrozenReplaceSystemMessage`); an `append`/`customize`
+   * distinction here would imply a choice that no longer does anything. If
+   * called after a session has started, never rejected -- takes effect
+   * starting the next `_createConfig()` derivation, not the in-flight turn
+   * (SYS-REQ-027f, resolved by SYS-REQ-027j).
    */
-  setSystemPrompt(systemPrompt: SessionConfig['systemMessage']): this {
-    this._systemPrompt = systemPrompt;
+  setSystemPrompt(content: string | undefined): this {
+    this._systemPrompt = content;
     return this;
   }
 
@@ -406,7 +415,7 @@ export class SessionWrapper {
       // the SDK can dispatch calls to them. Re-read fresh every call, same
       // as `_tools` itself (SYS-REQ-027j).
       tools: [...this._customTools.values()] as SessionConfig['tools'],
-      systemMessage: mergeToolUsageIntoSystemMessage(buildToolUsageSection(tools), this._systemPrompt),
+      systemMessage: buildFrozenReplaceSystemMessage(buildToolUsageSection(tools), this._systemPrompt),
       model: this._modelName,
       autoApproveAll: false,
       onPermissionRequest: async (
