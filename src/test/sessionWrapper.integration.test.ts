@@ -152,11 +152,24 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
 
   // Scope item 3 (SYS-REQ-027d): resume config re-derivation against a live
   // session. Mutates `_tools`/`_systemPrompt` between two `sendAndWait()`
-  // calls on the same instance and confirms the SECOND real HTTP request to
-  // CAPI reflects the new config, not the config the session was created
-  // with -- the live-SDK counterpart to #328's footgun regression coverage
-  // for issue #208 (resume dropping `systemMessage`).
-  it('re-derives config on resume so a live session sees the post-mutation tools/system prompt', { timeout: 30000 }, async () => {
+  // calls on the same instance. Per #345, `systemMessage` itself must now
+  // stay frozen across resumes (to protect the prompt/KV cache prefix) --
+  // the tool-list/system-prompt mutation instead shows up as (a) the
+  // re-derived `availableTools`/permission outcome, still fully live per
+  // turn, and (b) an update notice appended to the SECOND request's user
+  // turn. This test used to assert the opposite (systemMessage itself
+  // changing between requests) before #345; see git history for the
+  // pre-fix version and NOTE below re: snapshot regeneration.
+  //
+  // NOTE: `resume_rederivation.yaml` was recorded against the pre-#345
+  // request shape (systemMessage changing between turns). Now that the
+  // second request's systemMessage is frozen and its user turn carries an
+  // appended notice instead, the outgoing request body no longer matches
+  // what was recorded. The snapshot must be re-recorded against a live CAPI
+  // endpoint (this sandbox has no network path to one) before this test can
+  // pass again -- the assertions below encode the intended post-#345
+  // contract for whoever re-records it.
+  it('freezes systemMessage across resume; tool/prompt mutations surface via availableTools and an appended notice instead', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
       'src/test/snapshots/session_wrapper/resume_rederivation.yaml'
@@ -182,6 +195,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
 
       const firstSystem = completions[0].messages.find((m: any) => m.role === 'system')?.content ?? '';
       const secondSystem = completions[1].messages.find((m: any) => m.role === 'system')?.content ?? '';
+      const secondUser = [...completions[1].messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
 
       // Match SessionWrapper's own tool-usage sentence (buildToolUsageSection
       // in sessionWrapper.ts) rather than a bare substring like "bash" --
@@ -192,11 +206,18 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       expect(firstSystem).toContain('Initial prompt marker.');
       expect(firstSystem).not.toContain('Updated prompt marker.');
 
-      // The live SDK's second request must carry the re-derived config, not
-      // the one the session was created with.
-      expect(secondSystem).toContain('Only the following tools may be called: view.');
-      expect(secondSystem).not.toContain('Only the following tools may be called: bash.');
-      expect(secondSystem).toContain('Updated prompt marker.');
+      // #345: the second request's systemMessage must be byte-identical to
+      // the first's -- it is frozen at session creation and never
+      // re-derived on resume, regardless of what tools/system prompt
+      // changed in between (protects the prompt/KV cache prefix).
+      expect(secondSystem).toBe(firstSystem);
+
+      // The mutation is instead visible in the re-derived availableTools
+      // (still fully live per SYS-REQ-027d, unaffected by this fix) and in
+      // a notice appended ahead of the second turn's user prompt.
+      expect(secondUser).toContain('Tools added: view');
+      expect(secondUser).toContain('Tools removed: bash');
+      expect(secondUser).toContain('Additional operating instructions have also been updated');
     } finally {
       await client.stop();
     }
@@ -421,25 +442,21 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       );
       expect(realFileLeaked).toBe(false);
 
-      // Also assert on the tool-usage system-prompt section itself
-      // (buildToolUsageSection in sessionWrapper.ts), the same way
-      // resume_rederivation's test does for built-ins -- removal must be
-      // reflected in the re-derived prompt, not just enforced at the
-      // permission layer. Since 'echo_notes' was the only tool this
-      // instance ever had, removing it drops the derived tool list to
-      // empty, which flips buildToolUsageSection to its other branch
-      // entirely ("No tools are available...") rather than just shrinking
-      // the same "Only the following tools may be called: ..." sentence --
-      // so the first turn's tool-usage prefix must NOT still be present on
-      // the second turn.
+      // Post-#345: removal must NOT show up in the system prompt at all --
+      // that prompt is frozen at session creation (SYS-REQ-027k) precisely
+      // so a removal like this one doesn't bust the prefix/KV cache.
+      // Enforcement lives at the permission layer (already asserted above
+      // via `rejectionSeen`); the model learns about the removal from the
+      // notice appended to the second turn's user prompt instead.
       const completions = proxy.requestHistory.filter((r) => Array.isArray(r.messages));
       expect(completions.length).toBeGreaterThanOrEqual(2);
       const firstSystem = completions[0].messages.find((m: any) => m.role === 'system')?.content ?? '';
       const secondSystem = completions[1].messages.find((m: any) => m.role === 'system')?.content ?? '';
+      const secondUser = [...completions[1].messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
 
       expect(firstSystem).toContain('Only the following tools may be called: echo_notes.');
-      expect(secondSystem).not.toContain('Only the following tools may be called: echo_notes.');
-      expect(secondSystem).toContain('No tools are available in this session. Do not attempt to call any tool.');
+      expect(secondSystem).toBe(firstSystem);
+      expect(secondUser).toContain('Tools removed: echo_notes');
     } finally {
       await client.stop();
     }
@@ -494,19 +511,20 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       );
       expect(realFileLeaked).toBe(false);
 
-      // Same prefix check as the removeTool() case above -- proves
+      // Same frozen-prefix check as the removeTool() case above -- proves
       // _customTools was actually cleared by removeTools(), not just
       // _tools, since a stale _customTools entry wouldn't change what
-      // availableTools/the prompt derive from, but WOULD still show up in
+      // availableTools/the notice derive from, but WOULD still show up in
       // the derived `tools` dispatch array (the bug the reviewer flagged).
       const completions = proxy.requestHistory.filter((r) => Array.isArray(r.messages));
       expect(completions.length).toBeGreaterThanOrEqual(2);
       const firstSystem = completions[0].messages.find((m: any) => m.role === 'system')?.content ?? '';
       const secondSystem = completions[1].messages.find((m: any) => m.role === 'system')?.content ?? '';
+      const secondUser = [...completions[1].messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
 
       expect(firstSystem).toContain('Only the following tools may be called: echo_notes.');
-      expect(secondSystem).not.toContain('Only the following tools may be called: echo_notes.');
-      expect(secondSystem).toContain('No tools are available in this session. Do not attempt to call any tool.');
+      expect(secondSystem).toBe(firstSystem);
+      expect(secondUser).toContain('Tools removed: echo_notes');
     } finally {
       await client.stop();
     }

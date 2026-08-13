@@ -14,16 +14,20 @@ function fakeClient(): {
   client: CopilotClient;
   createCalls: FakeConfig[];
   resumeCalls: { sessionId: string; config: FakeConfig }[];
+  sessions: CopilotSession[];
 } {
   const createCalls: FakeConfig[] = [];
   const resumeCalls: { sessionId: string; config: FakeConfig }[] = [];
+  const sessions: CopilotSession[] = [];
   let nextId = 0;
 
   function fakeSession(sessionId: string): CopilotSession {
-    return {
+    const session = {
       sessionId,
       sendAndWait: vi.fn().mockResolvedValue(undefined),
     } as unknown as CopilotSession;
+    sessions.push(session);
+    return session;
   }
 
   const client = {
@@ -37,7 +41,7 @@ function fakeClient(): {
     }),
   } as unknown as CopilotClient;
 
-  return { client, createCalls, resumeCalls };
+  return { client, createCalls, resumeCalls, sessions };
 }
 
 function shellRequest(): PermissionRequest {
@@ -300,20 +304,25 @@ describe('SessionWrapper.sendAndWait', () => {
     expect(resumeCalls[0]?.config.availableTools).toEqual(['run_gh_command']);
   });
 
-  it('setSystemPrompt called after the session has started is never rejected and applies next turn (SYS-REQ-027f)', async () => {
-    const { client, createCalls, resumeCalls } = fakeClient();
+  it('setSystemPrompt called after the session has started is never rejected, but does not touch the frozen resumed systemMessage (SYS-REQ-027f/k) -- it reaches the model via the appended notice instead', async () => {
+    const { client, createCalls, resumeCalls, sessions } = fakeClient();
     const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     expect(() => wrapper.setSystemPrompt({ mode: 'replace', content: 'be terse' })).not.toThrow();
     await wrapper.sendAndWait('turn two');
 
-    expect(typeof createCalls[0]?.systemMessage === 'object' ? createCalls[0]?.systemMessage?.content : '').not.toContain(
-      'be terse'
-    );
-    expect(
-      typeof resumeCalls[0]?.config.systemMessage === 'object' ? resumeCalls[0]?.config.systemMessage?.content : ''
-    ).toContain('be terse');
+    // The resumed systemMessage is byte-identical to the create call's --
+    // 'be terse' never appears there (SYS-REQ-027k).
+    expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
+    // Instead, the change is relayed as a notice appended to the prompt.
+    // `sessions[0]` backs the create call ('turn one'); `sessions[1]` backs
+    // the resume call ('turn two') -- the fake hands back a fresh session
+    // object per call, mirroring the real client/session split.
+    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0];
+    expect(secondPrompt).toContain('Additional operating instructions have also been updated');
+    expect(secondPrompt).toContain('turn two');
   });
 
   it('setModelName called after the session has started is never rejected and applies next turn (SYS-REQ-027f)', async () => {
@@ -373,8 +382,8 @@ describe('SessionWrapper SDK-footgun regression tests', () => {
     expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
   });
 
-  it('keeps caller-supplied customize-mode sections untouched across a tool-list change (issue #146: per-tool section regeneration busts the prompt/KV cache)', async () => {
-    const { client, createCalls, resumeCalls } = fakeClient();
+  it('keeps the whole customize-mode systemMessage byte-identical across a tool-list change (issue #345: any per-turn systemMessage regeneration -- not just per-tool sections -- busts the prompt/KV cache)', async () => {
+    const { client, createCalls, resumeCalls, sessions } = fakeClient();
     const customizeSections = {
       identity: { action: 'append' as const, content: 'you are an auditor' },
     };
@@ -387,20 +396,66 @@ describe('SessionWrapper SDK-footgun regression tests', () => {
     wrapper.addTools('view'); // changes the tool list between calls
     await wrapper.sendAndWait('turn two');
 
-    // Tool-usage guidance must be folded into `content` (the mode's own free-
-    // form field), never into `sections` -- regenerating per-tool section
-    // overrides on every resume is exactly what invalidated the prompt/KV
-    // cache in #146. So `sections` must be byte-identical create-to-resume
-    // even though the tool list changed, and the tool-usage text must live
-    // in `content` instead.
+    // #146 was fixed by keeping `sections` untouched and folding tool
+    // guidance into `content` instead -- but content still changed
+    // ('bash' -> 'view'), which still busts the prefix/KV cache. #345's fix
+    // is stricter: the *entire* systemMessage (mode, sections, and content)
+    // must be byte-identical create-to-resume, full stop. The tool-list
+    // change is instead visible in `availableTools` (still re-derived, see
+    // the SYS-REQ-027d test above) and relayed to the model via a notice
+    // appended to the resumed turn's prompt (SYS-REQ-027k).
     const created = createCalls[0]?.systemMessage;
     const resumed = resumeCalls[0]?.config.systemMessage;
-    expect(created?.mode).toBe('customize');
-    expect(resumed?.mode).toBe('customize');
+    expect(resumed).toEqual(created);
     expect(created?.mode === 'customize' ? created.sections : undefined).toEqual(customizeSections);
-    expect(resumed?.mode === 'customize' ? resumed.sections : undefined).toEqual(customizeSections);
     expect(created?.mode === 'customize' ? created.content : '').toContain('bash');
-    expect(resumed?.mode === 'customize' ? resumed.content : '').toContain('view');
+
+    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0];
+    expect(secondPrompt).toContain('Tools added: view');
+  });
+});
+
+describe('SessionWrapper resume update notice (SYS-REQ-027k, issue #345)', () => {
+  it('appends no notice when nothing changed between turns', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    await wrapper.sendAndWait('turn two');
+
+    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
+    expect(resumedSendAndWait.mock.calls[0]?.[0]).toBe('turn two');
+  });
+
+  it('reports both additions and removals in the same notice', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client).addTools('bash', 'view').setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    wrapper.addTools('grep').removeTools('view');
+    await wrapper.sendAndWait('turn two');
+
+    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
+    expect(secondPrompt).toContain('Tools added: grep');
+    expect(secondPrompt).toContain('Tools removed: view');
+    expect(secondPrompt.endsWith('turn two')).toBe(true);
+  });
+
+  it('prepends the notice into MessageOptions.prompt rather than dropping the rest of the options', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    wrapper.addTools('view');
+    await wrapper.sendAndWait({ prompt: 'turn two', attachments: [{ type: 'file', path: '/tmp/x.txt' }] } as never);
+
+    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const secondOptions = resumedSendAndWait.mock.calls[0]?.[0] as { prompt: string; attachments: unknown[] };
+    expect(secondOptions.prompt).toContain('Tools added: view');
+    expect(secondOptions.prompt.endsWith('turn two')).toBe(true);
+    expect(secondOptions.attachments).toEqual([{ type: 'file', path: '/tmp/x.txt' }]);
   });
 });
 

@@ -145,6 +145,55 @@ function mergeToolUsageIntoSystemMessage(
 }
 
 /**
+ * Builds a plain-text notice describing what changed in tool list / system
+ * prompt since the last turn, or `undefined` if nothing changed. Appended to
+ * the outgoing prompt on resume (SYS-REQ-027k) instead of folding the change
+ * into `systemMessage`, which -- per the KV-cache prefix hazard documented on
+ * issue #345 -- must stay byte-identical across every `resumeSession` call
+ * for a given session. A message appended to the *end* of the conversation
+ * only ever grows the prompt; it never rewrites tokens the cache already has,
+ * so it cannot itself cause a prefix mismatch the way editing `systemMessage`
+ * does.
+ */
+function buildSessionUpdateNotice(
+  previousTools: readonly string[],
+  nextTools: readonly string[],
+  previousSystemPrompt: SessionConfig['systemMessage'],
+  nextSystemPrompt: SessionConfig['systemMessage']
+): string | undefined {
+  const previousSet = new Set(previousTools);
+  const nextSet = new Set(nextTools);
+  const added = nextTools.filter((name) => !previousSet.has(name));
+  const removed = previousTools.filter((name) => !nextSet.has(name));
+  const systemPromptChanged =
+    JSON.stringify(previousSystemPrompt) !== JSON.stringify(nextSystemPrompt);
+
+  if (added.length === 0 && removed.length === 0 && !systemPromptChanged) {
+    return undefined;
+  }
+
+  const lines: string[] = [
+    '# Session update',
+    "This session's configuration changed since the last turn. The system " +
+      'prompt shown above is not being regenerated (it must stay fixed for ' +
+      'prompt-cache reasons), so this note is how any change reaches you.',
+  ];
+  if (added.length > 0) {
+    lines.push(`Tools added: ${added.join(', ')}.`);
+  }
+  if (removed.length > 0) {
+    lines.push(
+      `Tools removed: ${removed.join(', ')}. Do not call these; calls to them will be rejected.`
+    );
+  }
+  lines.push(`Tools currently available: ${nextTools.length > 0 ? nextTools.join(', ') : '(none)'}.`);
+  if (systemPromptChanged) {
+    lines.push('Additional operating instructions have also been updated for this turn.');
+  }
+  return lines.join('\n');
+}
+
+/**
  * `SessionWrapper` — replaces `hardenedSession.ts` (see README.md
  * "SessionWrapper — Spec Draft (EARS)", SYS-REQ-027 family). Built in
  * isolation per the spec's hotswap migration strategy: this file has zero
@@ -195,6 +244,28 @@ export class SessionWrapper {
    * of resume (SYS-REQ-027c).
    */
   private _session: CopilotSession | undefined = undefined;
+
+  /**
+   * The `systemMessage` passed on session *creation* (SYS-REQ-027k). Frozen
+   * the moment `createSession` is called and reused byte-for-byte on every
+   * subsequent `resumeSession` for this session's lifetime, regardless of
+   * later `addTool`/`removeTool`/`setSystemPrompt` calls -- the SDK includes
+   * `systemMessage` in the cached prompt prefix, so re-deriving it per turn
+   * (the pre-#345 behavior) busts that prefix's KV cache on every resume.
+   * `undefined` until the first `sendAndWait()` creates a session.
+   */
+  private _frozenSystemMessage: SessionConfig['systemMessage'] | undefined = undefined;
+
+  /**
+   * Snapshot of `_tools`/`_systemPrompt` as of the last turn actually sent
+   * to the SDK (create or resume) -- NOT the same as "as of the last
+   * mutator call". Diffed against current state in `sendAndWait()` to decide
+   * what belongs in the update notice appended to this turn's prompt
+   * (SYS-REQ-027k). Tool identity only; `_customTools`' handlers don't
+   * factor into the diff.
+   */
+  private _announcedTools: readonly string[] = [];
+  private _announcedSystemPrompt: SessionConfig['systemMessage'] | undefined = undefined;
 
   /**
    * `_client` is optional at construction so existing `_createConfig()`-only
@@ -387,16 +458,49 @@ export class SessionWrapper {
       throw new Error('SessionWrapper.sendAndWait: no model name was set. Call setModelName() first.');
     }
     const config = this._createConfig();
+    let effectivePrompt = prompt;
 
-    this._session = this._session
-      ? await this._client.resumeSession(this._session.sessionId, { ...this._baseConfig, ...config })
-      : await this._client.createSession({ ...this._baseConfig, ...config });
+    if (!this._session) {
+      // Creating: `config.systemMessage` becomes the permanent prefix for
+      // this session's life (SYS-REQ-027k) -- freeze it now, before it's
+      // ever sent, so every later resume reuses this exact value.
+      this._frozenSystemMessage = config.systemMessage;
+      this._session = await this._client.createSession({ ...this._baseConfig, ...config });
+    } else {
+      // Resuming: reuse the frozen systemMessage rather than `config`'s
+      // freshly-derived one, so this call's prefix is byte-identical to the
+      // create call's (SYS-REQ-027k / issue #345). Any drift in tools or
+      // system prompt since the last turn is relayed via a notice appended
+      // to the prompt below instead -- that only grows the conversation, so
+      // it can't itself invalidate the cached prefix the way editing
+      // `systemMessage` would.
+      const notice = buildSessionUpdateNotice(
+        this._announcedTools,
+        [...this._tools],
+        this._announcedSystemPrompt,
+        this._systemPrompt
+      );
+      const resumeConfig = { ...config, systemMessage: this._frozenSystemMessage };
+      this._session = await this._client.resumeSession(this._session.sessionId, {
+        ...this._baseConfig,
+        ...resumeConfig,
+      });
+      if (notice) {
+        effectivePrompt =
+          typeof prompt === 'string'
+            ? `${notice}\n\n${prompt}`
+            : { ...prompt, prompt: `${notice}\n\n${prompt.prompt}` };
+      }
+    }
+
+    this._announcedTools = [...this._tools];
+    this._announcedSystemPrompt = this._systemPrompt;
 
     // TS can't resolve `session.sendAndWait`'s overloads against a `string |
     // MessageOptions` union directly (call site, not signature, must narrow) --
     // this branch exists only for that; both arms call the same thing.
-    return typeof prompt === 'string'
-      ? this._session.sendAndWait(prompt, timeout)
-      : this._session.sendAndWait(prompt, timeout);
+    return typeof effectivePrompt === 'string'
+      ? this._session.sendAndWait(effectivePrompt, timeout)
+      : this._session.sendAndWait(effectivePrompt, timeout);
   }
 }
