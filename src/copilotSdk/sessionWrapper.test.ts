@@ -230,7 +230,7 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     expect(resumeCalls[0]?.sessionId).toBe('session-0');
   });
 
-  it('resume sends only onPermissionRequest (plus the required autoApproveAll: false) -- no tools, availableTools, systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
+  it('resume sends onPermissionRequest, autoApproveAll: false, and the SDK-mandatory tools/availableTools -- no systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
     const { client, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, { workingDirectory: '/tmp/work' })
       .setSystemPrompt('be terse')
@@ -246,7 +246,12 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     // omitted, which would silently replace onPermissionRequest with an
     // auto-approve-everything handler and defeat SYS-REQ-028d entirely.
     expect(resumeConfig?.autoApproveAll).toBe(false);
-    expect(Object.keys(resumeConfig ?? {}).sort()).toEqual(['autoApproveAll', 'onPermissionRequest']);
+    expect(Object.keys(resumeConfig ?? {}).sort()).toEqual([
+      'autoApproveAll',
+      'availableTools',
+      'onPermissionRequest',
+      'tools',
+    ]);
   });
 
   it('the wire-level tools schema is byte-identical between create and every resume, even after enableTools/disableTools (SYS-REQ-028/028a)', async () => {
