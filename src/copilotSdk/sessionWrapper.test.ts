@@ -321,6 +321,7 @@ describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/0
     expect(firstPrompt).toContain('bash, view');
     expect(firstPrompt.endsWith('turn one')).toBe(true);
   });
+});
 
   it('is present again on the second turn even when nothing changed', async () => {
     const { client, sessions } = fakeClient();
