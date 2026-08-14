@@ -230,7 +230,7 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     expect(resumeCalls[0]?.sessionId).toBe('session-0');
   });
 
-  it('resume sends onPermissionRequest, autoApproveAll, tools, and availableTools -- no systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
+  it('resume sends onPermissionRequest, autoApproveAll: false, and the SDK-mandatory tools/availableTools -- no systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
     const { client, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, { workingDirectory: '/tmp/work' })
       .setSystemPrompt('be terse')
@@ -241,22 +241,17 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
 
     const resumeConfig = resumeCalls[0]?.config;
     expect(resumeConfig?.onPermissionRequest).toBeDefined();
-    // `tools`/`availableTools` ARE resent on resume, byte-identical to
-    // creation -- verified against the live SDK (not just this mock double):
-    // the real SDK does not retain handler-backed custom tools across
-    // `resumeSession`, so omitting them makes the SDK itself believe a
-    // construction-time tool no longer exists and short-circuit with its own
-    // "does not exist" rejection, which never reaches `onPermissionRequest`
-    // and so silently defeats SYS-REQ-028d enforcement. `autoApproveAll:
-    // false` must also be explicit, since `CopilotClient.resumeSession`
-    // (boundary.ts) defaults it to `true` when omitted, which would swap in
-    // an always-approve handler and discard `onPermissionRequest` entirely.
-    // `systemMessage`/`model`/base-config fields are still correctly absent:
-    // those may never legitimately differ from what creation already sent.
-    expect(Object.keys(resumeConfig ?? {}).sort()).toEqual(
-      ['autoApproveAll', 'availableTools', 'onPermissionRequest', 'tools'].sort()
-    );
+    // autoApproveAll: false must ride along -- CopilotClient's own
+    // resumeSession override (boundary.ts) defaults it to true when
+    // omitted, which would silently replace onPermissionRequest with an
+    // auto-approve-everything handler and defeat SYS-REQ-028d entirely.
     expect(resumeConfig?.autoApproveAll).toBe(false);
+    expect(Object.keys(resumeConfig ?? {}).sort()).toEqual([
+      'autoApproveAll',
+      'availableTools',
+      'onPermissionRequest',
+      'tools',
+    ]);
   });
 
   it('the wire-level tools schema is byte-identical between create and every resume, even after enableTools/disableTools (SYS-REQ-028/028a)', async () => {
@@ -388,7 +383,7 @@ describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/0
     const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
     expect(secondPrompt).toContain("additional operating instructions changed");
   });
-});
+
 
 describe('SessionWrapper.sendAndWait: mid-turn enablement race (SYS-REQ-028k)', () => {
   it('an in-flight call is unaffected by a disableTools that lands after its permission check already ran; a later call to the same tool is denied', async () => {
