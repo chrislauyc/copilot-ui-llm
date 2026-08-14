@@ -48,11 +48,23 @@ export interface SessionWrapperToolsConfig {
  * to already resolve via `toolName` (custom/MCP/hook tools) and is checked
  * unchanged.
  *
- * FOOTGUN (carried forward from the pre-028 implementation, verified against
- * the live SDK): `view` and `grep` collide on kind `'read'`. This is
- * currently NOT exploitable in practice because the SDK's own
- * `availableTools` gate is name-based, but that safety is incidental to this
- * file's logic, not guaranteed by it.
+ * COLLISION (verified against the live SDK's `PermissionRequestRead` shape,
+ * which carries `path`/`intention`/`toolCallId` but no tool name): `view`,
+ * `grep`, and `glob` all map to kind `'read'`. Before SYS-REQ-028d-1, this
+ * was masked by the SDK's own name-based `availableTools` gate, which
+ * rejected a disabled sibling by name before this handler ever ran. Now that
+ * `availableTools` is always the full construction-time list, a same-kind
+ * request CAN reach `_onPermissionRequest` while only some kind-siblings are
+ * enabled, and there is no field in the request to tell which specific
+ * sibling issued it. `_onPermissionRequest` handles this by requiring EVERY
+ * built-in sharing a requested kind to be enabled before approving --
+ * disabling any one of `view`/`grep`/`glob` causes calls resolved to `'read'`
+ * to be rejected until it's re-enabled, even for calls that were "really"
+ * meant for a still-enabled sibling. This is deliberately conservative:
+ * SYS-REQ-028d requires a disabled tool's calls to be rejected, and
+ * over-rejecting an ambiguous shared-kind call is the only safe direction
+ * when the alternative is silently approving one that could be a disabled
+ * tool in disguise.
  */
 const BUILTIN_TOOL_PERMISSION_KIND: Readonly<Record<string, string>> = {
   bash: 'shell',
@@ -183,6 +195,19 @@ export class SessionWrapper {
   private readonly _allToolNamesSet: ReadonlySet<string>;
 
   /**
+   * Reverse index from a shared `BUILTIN_TOOL_PERMISSION_KIND` value to every
+   * construction-time built-in name that maps to it (e.g. `'read'` ->
+   * `['view', 'grep', 'glob']`, restricted to whichever of those this
+   * instance actually declared). Built once at construction, since
+   * `_allToolNames` never changes afterward. Used by `_onPermissionRequest`
+   * to detect when a `kind`-derived request is ambiguous between multiple
+   * declared built-ins (see the COLLISION note on `BUILTIN_TOOL_PERMISSION_KIND`).
+   * A kind with zero or one sibling here is unambiguous and never triggers
+   * the conservative all-siblings-enabled rule.
+   */
+  private readonly _kindSiblings: ReadonlyMap<string, readonly string[]>;
+
+  /**
    * Handler-backed tools this instance owns, fixed at construction
    * (SYS-REQ-028a). Keyed by name; `_createConfig()` derives the SDK's
    * `tools` dispatch array from this map's values every time, but the map's
@@ -259,6 +284,18 @@ export class SessionWrapper {
     this._allToolNames = [...builtins, ...this._customTools.keys()];
     this._allToolNamesSet = new Set(this._allToolNames);
     this._enabledTools = new Set(this._allToolNames);
+
+    const kindSiblings = new Map<string, string[]>();
+    for (const name of builtins) {
+      const kind = BUILTIN_TOOL_PERMISSION_KIND[name];
+      if (kind === undefined) {
+        continue;
+      }
+      const siblings = kindSiblings.get(kind) ?? [];
+      siblings.push(name);
+      kindSiblings.set(kind, siblings);
+    }
+    this._kindSiblings = kindSiblings;
   }
 
   /**
@@ -340,16 +377,28 @@ export class SessionWrapper {
    * between two calls to the same tool is honored on the second call even
    * within the same turn, while a call whose permission check already ran is
    * unaffected by a mutation that arrives afterward.
+   *
+   * Handles the `BUILTIN_TOOL_PERMISSION_KIND` collision (see its doc
+   * comment): if the resolved `requestedTool` is a `kind` shared by more
+   * than one construction-time built-in (`_kindSiblings`), the request is
+   * approved only when EVERY sibling sharing that kind is currently enabled
+   * -- there is no way to tell from the request alone which specific
+   * sibling actually issued it, so approving when even one sibling is
+   * disabled risks silently granting a disabled tool's call, which
+   * SYS-REQ-028d forbids. For a `requestedTool` with zero or one sibling
+   * (the common case), this reduces to the original single-name check.
    */
   private _onPermissionRequest = async (
     req: PermissionRequest,
     _invocation: { sessionId: string }
   ): Promise<PermissionRequestResult> => {
     const requestedTool = extractRequestedToolName(req);
-    const allowedKinds = new Set(
-      [...this._enabledTools].map((name) => BUILTIN_TOOL_PERMISSION_KIND[name] ?? name)
-    );
-    if (allowedKinds.has(requestedTool)) {
+    const siblings = this._kindSiblings.get(requestedTool);
+    const isApproved =
+      siblings !== undefined && siblings.length > 0
+        ? siblings.every((name) => this._enabledTools.has(name))
+        : this._enabledTools.has(requestedTool);
+    if (isApproved) {
       return { kind: 'approve-once' };
     }
     return {
@@ -420,9 +469,20 @@ export class SessionWrapper {
 
     const enabledSubset = this._allToolNames.filter((name) => this._enabledTools.has(name));
     const noticeParts = [buildEnablementNotice(enabledSubset)];
-    const systemPromptNotice = buildSystemPromptUpdateNotice(this._announcedSystemPrompt, this._systemPrompt);
-    if (systemPromptNotice) {
-      noticeParts.push(systemPromptNotice);
+    // Only ever relevant on resume: on creation there is no "last turn" to
+    // have diverged from, since the caller's current `_systemPrompt` is
+    // exactly what's about to be folded into `systemMessage` for the first
+    // time (via `buildCustomizeSystemMessage` below). Computing this
+    // unconditionally would fire a misleading "changed since last turn"
+    // notice on turn one whenever `setSystemPrompt` was called before the
+    // first `sendAndWait` -- there was no previous turn for it to have
+    // changed since.
+    const isResume = this._session !== undefined;
+    if (isResume) {
+      const systemPromptNotice = buildSystemPromptUpdateNotice(this._announcedSystemPrompt, this._systemPrompt);
+      if (systemPromptNotice) {
+        noticeParts.push(systemPromptNotice);
+      }
     }
     const notice = noticeParts.join('\n\n');
 
