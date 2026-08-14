@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SessionWrapper } from './sessionWrapper';
-import type { CopilotClient, CopilotSession, PermissionRequest, SessionConfig } from './boundary';
+import { SessionWrapper } from '../copilotSdk/sessionWrapper';
+import type { CopilotClient, CopilotSession, PermissionRequest, SessionConfig } from '../copilotSdk/boundary';
 
 /**
  * Minimal fake `CopilotClient`: records every `createSession`/`resumeSession`
@@ -230,7 +230,7 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     expect(resumeCalls[0]?.sessionId).toBe('session-0');
   });
 
-  it('resume sends only onPermissionRequest (plus the required autoApproveAll: false) -- no tools, availableTools, systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
+  it('resume sends onPermissionRequest, autoApproveAll, tools, and availableTools -- no systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
     const { client, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, { workingDirectory: '/tmp/work' })
       .setSystemPrompt('be terse')
@@ -241,26 +241,40 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
 
     const resumeConfig = resumeCalls[0]?.config;
     expect(resumeConfig?.onPermissionRequest).toBeDefined();
-    // autoApproveAll: false must ride along -- CopilotClient's own
-    // resumeSession override (boundary.ts) defaults it to true when
-    // omitted, which would silently replace onPermissionRequest with an
-    // auto-approve-everything handler and defeat SYS-REQ-028d entirely.
+    // `tools`/`availableTools` ARE resent on resume, byte-identical to
+    // creation -- verified against the live SDK (not just this mock double):
+    // the real SDK does not retain handler-backed custom tools across
+    // `resumeSession`, so omitting them makes the SDK itself believe a
+    // construction-time tool no longer exists and short-circuit with its own
+    // "does not exist" rejection, which never reaches `onPermissionRequest`
+    // and so silently defeats SYS-REQ-028d enforcement. `autoApproveAll:
+    // false` must also be explicit, since `CopilotClient.resumeSession`
+    // (boundary.ts) defaults it to `true` when omitted, which would swap in
+    // an always-approve handler and discard `onPermissionRequest` entirely.
+    // `systemMessage`/`model`/base-config fields are still correctly absent:
+    // those may never legitimately differ from what creation already sent.
+    expect(Object.keys(resumeConfig ?? {}).sort()).toEqual(
+      ['autoApproveAll', 'availableTools', 'onPermissionRequest', 'tools'].sort()
+    );
     expect(resumeConfig?.autoApproveAll).toBe(false);
-    expect(Object.keys(resumeConfig ?? {}).sort()).toEqual(['autoApproveAll', 'onPermissionRequest']);
   });
 
   it('the wire-level tools schema is byte-identical between create and every resume, even after enableTools/disableTools (SYS-REQ-028/028a)', async () => {
-    const { client, createCalls } = fakeClient();
+    const { client, createCalls, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash', 'view'] }).setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     wrapper.disableTools('bash').enableTools('bash').disableTools('view');
     await wrapper.sendAndWait('turn two');
 
-    // Since resume never re-sends `tools`/`availableTools` at all (028g),
-    // the only thing to check byte-identity against is what create sent --
-    // there is no second value to diff.
+    // `tools`/`availableTools` ARE resent on resume (SYS-REQ-028g's SDK-
+    // requires-it carve-out, see previous test) -- but their VALUE must
+    // still be byte-identical to what create sent, never narrowed to the
+    // enabled subset, regardless of the enableTools/disableTools calls in
+    // between (SYS-REQ-028/028a/028d-1).
     expect(createCalls[0]?.availableTools).toEqual(['bash', 'view']);
+    expect(resumeCalls[0]?.config?.availableTools).toEqual(['bash', 'view']);
+    expect(resumeCalls[0]?.config?.tools).toEqual(createCalls[0]?.tools);
   });
 });
 
