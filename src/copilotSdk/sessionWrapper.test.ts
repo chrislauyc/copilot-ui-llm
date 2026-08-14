@@ -383,7 +383,7 @@ describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/0
     const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
     expect(secondPrompt).toContain("additional operating instructions changed");
   });
-});
+
 
 describe('SessionWrapper.sendAndWait: mid-turn enablement race (SYS-REQ-028k)', () => {
   it('an in-flight call is unaffected by a disableTools that lands after its permission check already ran; a later call to the same tool is denied', async () => {
