@@ -422,21 +422,21 @@ drift this spec exists to close off. See "Migration plan" section at the end.
   the *current* turn is unaffected, since permission for that turn was already
   derived. Behavior is well-defined per-turn, not "live" within a turn.
 
-- **SYS-REQ-027k (Resolved — issue #345):** `systemMessage` **shall** be
+- **SYS-REQ-027k (Resolved — issue #146):** `systemMessage` **shall** be
   frozen at session creation and reused byte-for-byte on every subsequent
   `resumeSession` call for that session's lifetime — `SessionWrapper` **shall
   not** regenerate it on resume, even though SYS-REQ-027d requires everything
   else in the config to be freshly re-derived. Rationale: the SDK includes
   `systemMessage` in the cached prompt prefix; any per-turn edit to it —
-  whether from a tool-list change (the original #345 report, `addTool`/
-  `removeTool` regenerating the tool-usage section) or a caller's own
+  whether from a tool-list change (`addTool`/`removeTool` regenerating the
+  tool-usage section, the original #146 report) or a caller's own
   `setSystemPrompt` call taking effect on resume — invalidates that prefix's
   KV cache on every single resume, defeating prompt caching for the entire
-  session. This supersedes the "systemMessage mode selection" framing in
-  SYS-REQ-027b/issue #146: #146's fix (keep `sections` static, fold tool
-  guidance into `content` only) still let `content` itself change turn to
-  turn, which still busted the prefix — #345 is the stricter fix and is the
-  one that actually holds the prefix fixed.
+  session. This supersedes the earlier "systemMessage mode selection" framing
+  also tracked under #146: an initial, insufficient fix (keep `sections`
+  static, fold tool guidance into `content` only) still let `content` itself
+  change turn to turn, which still busted the prefix. SYS-REQ-027k above is
+  the stricter fix that actually holds the prefix fixed.
   - **If** the tool list or system prompt has changed since the last turn
     actually sent to the SDK (create or resume), **then** `sendAndWait()`
     **shall** prepend a plain-text notice to that turn's outgoing prompt
@@ -464,9 +464,10 @@ drift this spec exists to close off. See "Migration plan" section at the end.
    candidate tool (in-list → approved, not-in-list → denied) never disagree —
    assert on `_createConfig()`'s output as a black box.
 2. **SDK-footgun regression tests (027b, 027d, 027k):** one per documented landmine
-   (issue #208 resume dropping `systemMessage`, issue #146 customize-mode cache
-   invalidation, issue #345 systemMessage regeneration on resume busting the
-   prompt/KV cache prefix, any others surfaced in comments) — these exist
+   (issue #208 resume dropping `systemMessage`, issue #146 covering both the
+   initial customize-mode cache invalidation and the stricter systemMessage
+   regeneration fix that actually busts the prompt/KV cache prefix, any others
+   surfaced in comments) — these exist
    specifically because `_createConfig()` is intentionally opaque, so the
    tests are the only enforcement that those constraints keep holding.
 3. **Contract tests on `sendAndWait` (027c):** call it fresh, call it again on

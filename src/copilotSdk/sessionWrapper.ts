@@ -110,10 +110,10 @@ function buildToolUsageSection(tools: readonly string[]): string {
 
 /**
  * Builds the entire outgoing `systemMessage` in the SDK's `replace` mode,
- * unconditionally (issue #345 follow-up). `append`/`customize` modes still
+ * unconditionally (issue #146 follow-up). `append`/`customize` modes still
  * splice an SDK-managed `tool_instructions` section into the prompt that's
  * re-derived from the live `availableTools` on every single turn -- that
- * per-turn regeneration is exactly the KV-cache-prefix hazard #345 exists to
+ * per-turn regeneration is exactly the KV-cache-prefix hazard #146 exists to
  * close, and no combination of our own content in those modes can stop the
  * SDK from doing it. `replace` mode is the only one that hands us the whole
  * prompt with nothing left for the SDK to inject.
@@ -144,7 +144,7 @@ function buildFrozenReplaceSystemMessage(
  * prompt since the last turn, or `undefined` if nothing changed. Appended to
  * the outgoing prompt on resume (SYS-REQ-027k) instead of folding the change
  * into `systemMessage`, which -- per the KV-cache prefix hazard documented on
- * issue #345 -- must stay byte-identical across every `resumeSession` call
+ * issue #146 -- must stay byte-identical across every `resumeSession` call
  * for a given session. A message appended to the *end* of the conversation
  * only ever grows the prompt; it never rewrites tokens the cache already has,
  * so it cannot itself cause a prefix mismatch the way editing `systemMessage`
@@ -229,7 +229,7 @@ export class SessionWrapper {
 
   /**
    * Caller-supplied additional instructions, plain text only. Unlike before
-   * #345's `replace`-mode switch, there is no `mode`/`sections` concept left
+   * #146's `replace`-mode switch, there is no `mode`/`sections` concept left
    * to expose here: `_createConfig()` always forces `systemMessage` into the
    * SDK's `replace` mode (see `buildFrozenReplaceSystemMessage`), so an
    * `append`/`customize` mode or a `sections` override from the caller would
@@ -254,7 +254,7 @@ export class SessionWrapper {
    * subsequent `resumeSession` for this session's lifetime, regardless of
    * later `addTool`/`removeTool`/`setSystemPrompt` calls -- the SDK includes
    * `systemMessage` in the cached prompt prefix, so re-deriving it per turn
-   * (the pre-#345 behavior) busts that prefix's KV cache on every resume.
+   * (the pre-#146-fix behavior) busts that prefix's KV cache on every resume.
    * `undefined` until the first `sendAndWait()` creates a session.
    */
   private _frozenSystemMessage: SessionConfig['systemMessage'] | undefined = undefined;
@@ -358,7 +358,7 @@ export class SessionWrapper {
   /**
    * Sets the caller's additional operating instructions (SYS-REQ-027a),
    * appended after the SDK baseline and tool-usage section that
-   * `_createConfig()` always builds first. Plain text only -- as of #345's
+   * `_createConfig()` always builds first. Plain text only -- as of #146's
    * `replace`-mode switch there's no `mode`/`sections` for a caller to pick,
    * since `_createConfig()` always forces the SDK's `replace` mode itself
    * (see `buildFrozenReplaceSystemMessage`); an `append`/`customize`
@@ -495,7 +495,7 @@ export class SessionWrapper {
     } else {
       // Resuming: reuse the frozen systemMessage rather than `config`'s
       // freshly-derived one, so this call's prefix is byte-identical to the
-      // create call's (SYS-REQ-027k / issue #345). Any drift in tools or
+      // create call's (SYS-REQ-027k / issue #146). Any drift in tools or
       // system prompt since the last turn is relayed via a notice appended
       // to the prompt below instead -- that only grows the conversation, so
       // it can't itself invalidate the cached prefix the way editing
