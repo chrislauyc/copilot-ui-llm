@@ -255,17 +255,21 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
   });
 
   it('the wire-level tools schema is byte-identical between create and every resume, even after enableTools/disableTools (SYS-REQ-028/028a)', async () => {
-    const { client, createCalls } = fakeClient();
+    const { client, createCalls, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash', 'view'] }).setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     wrapper.disableTools('bash').enableTools('bash').disableTools('view');
     await wrapper.sendAndWait('turn two');
 
-    // Since resume never re-sends `tools`/`availableTools` at all (028g),
-    // the only thing to check byte-identity against is what create sent --
-    // there is no second value to diff.
+    // `tools`/`availableTools` ARE resent on resume (SYS-REQ-028g's SDK-
+    // requires-it carve-out, see previous test) -- but their VALUE must
+    // still be byte-identical to what create sent, never narrowed to the
+    // enabled subset, regardless of the enableTools/disableTools calls in
+    // between (SYS-REQ-028/028a/028d-1).
     expect(createCalls[0]?.availableTools).toEqual(['bash', 'view']);
+    expect(resumeCalls[0]?.config?.availableTools).toEqual(['bash', 'view']);
+    expect(resumeCalls[0]?.config?.tools).toEqual(createCalls[0]?.tools);
   });
 });
 
@@ -312,6 +316,7 @@ describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/0
     expect(firstPrompt).toContain('bash, view');
     expect(firstPrompt.endsWith('turn one')).toBe(true);
   });
+});
 
   it('is present again on the second turn even when nothing changed', async () => {
     const { client, sessions } = fakeClient();
