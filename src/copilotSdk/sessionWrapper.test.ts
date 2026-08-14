@@ -412,7 +412,6 @@ describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/0
   });
 });
 
-
 describe('SessionWrapper.sendAndWait: mid-turn enablement race (SYS-REQ-028k)', () => {
   it('an in-flight call is unaffected by a disableTools that lands after its permission check already ran; a later call to the same tool is denied', async () => {
     const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
