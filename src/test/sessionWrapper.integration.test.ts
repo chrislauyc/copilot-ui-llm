@@ -54,8 +54,8 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     });
   }
 
-  function makeWrapper(client: CopilotClient): SessionWrapper {
-    return new SessionWrapper(client, {
+  function makeWrapper(client: CopilotClient, toolsConfig: ConstructorParameters<typeof SessionWrapper>[1] = {}): SessionWrapper {
+    return new SessionWrapper(client, toolsConfig, {
       provider: {
         type: 'openai',
         baseUrl: proxyUrl,
@@ -175,7 +175,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     const client = makeClient();
     await client.start();
     try {
-      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTools('view');
+      const wrapper = makeWrapper(client, { builtins: ['view'] }).setModelName('claude-sonnet-4.5');
 
       const result = await wrapper.sendAndWait('Check notes.txt', 15000);
       expect(result).toBeTruthy();
@@ -221,14 +221,13 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     const client = makeClient();
     await client.start();
     try {
-      const wrapper = makeWrapper(client)
+      const wrapper = makeWrapper(client, { builtins: ['bash', 'view'] })
         .setModelName('claude-sonnet-4.5')
-        .addTools('bash')
         .setSystemPrompt('Initial prompt marker.');
 
       await wrapper.sendAndWait('Status check', 15000);
 
-      wrapper.removeTools('bash').addTools('view').setSystemPrompt('Updated prompt marker.');
+      wrapper.disableTools('bash').enableTools('view').setSystemPrompt('Updated prompt marker.');
 
       await wrapper.sendAndWait('Status check', 15000);
 
@@ -244,22 +243,19 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       // the SDK's own boilerplate instructions mention built-in tool names
       // generically, which would make a bare substring check pass
       // regardless of what SessionWrapper actually derived.
-      expect(firstSystem).toContain('Only the following tools may be called: bash.');
       expect(firstSystem).toContain('Initial prompt marker.');
       expect(firstSystem).not.toContain('Updated prompt marker.');
 
-      // #345: the second request's systemMessage must be byte-identical to
-      // the first's -- it is frozen at session creation and never
-      // re-derived on resume, regardless of what tools/system prompt
-      // changed in between (protects the prompt/KV cache prefix).
+      // SYS-REQ-028g/h: the second request's systemMessage is not even sent
+      // on resume (only onPermissionRequest is), so it stays whatever the
+      // SDK already has cached from creation regardless of what changed.
       expect(secondSystem).toBe(firstSystem);
 
-      // The mutation is instead visible in the re-derived availableTools
-      // (still fully live per SYS-REQ-027d, unaffected by this fix) and in
-      // a notice appended ahead of the second turn's user prompt.
-      expect(secondUser).toContain('Tools added: view');
-      expect(secondUser).toContain('Tools removed: bash');
-      expect(secondUser).toContain('Additional operating instructions have also been updated');
+      // The mutation is instead visible only via the per-turn enablement
+      // notice (SYS-REQ-028i/028l), never in availableTools (fixed at
+      // construction per SYS-REQ-028/028d-1).
+      expect(secondUser).toContain('Only the following tools are currently enabled and may be called: view.');
+      expect(secondUser).toContain("additional operating instructions changed");
     } finally {
       await client.stop();
     }
@@ -280,13 +276,13 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     const client = makeClient();
     await client.start();
     try {
-      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTools('view');
+      const wrapper = makeWrapper(client, { builtins: ['view'] }).setModelName('claude-sonnet-4.5');
 
       // Turn 1: 'view' is allowed but the scripted turn doesn't call it yet.
       await wrapper.sendAndWait('Stand by', 15000);
 
-      // Remove the tool, then resume with a turn that tries to call it.
-      wrapper.removeTools('view');
+      // Disable the tool, then resume with a turn that tries to call it.
+      wrapper.disableTools('view');
       await wrapper.sendAndWait('Check notes.txt again', 15000);
 
       // The live SDK must actually deny the call -- either via our
@@ -303,12 +299,12 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
             (m: any) =>
               m.role === 'tool' &&
               typeof m.content === 'string' &&
-              (m.content.includes('is not permitted under this session') || m.content.includes('does not exist'))
+              m.content.includes('is not currently enabled for this session')
           )
       );
       expect(rejectionSeen).toBe(true);
 
-      // And the tool must never have actually executed post-removal: no
+      // And the tool must never have actually executed post-disable: no
       // request should show a successful tool-result echoing the real file
       // contents we seeded (that would mean the SDK ran 'view' anyway).
       const realFileLeaked = proxy.requestHistory.some(
@@ -349,7 +345,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     try {
       // Deliberately add only 'view', never 'grep' -- both share permission
       // kind 'read' per BUILTIN_TOOL_PERMISSION_KIND.
-      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTools('view');
+      const wrapper = makeWrapper(client, { builtins: ['view'] }).setModelName('claude-sonnet-4.5');
 
       await wrapper.sendAndWait('Search for TODO in notes.txt using grep', 15000);
 
@@ -362,7 +358,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
             (m: any) =>
               m.role === 'tool' &&
               typeof m.content === 'string' &&
-              (m.content.includes("Tool 'grep' does not exist") || m.content.includes('is not permitted under this session'))
+              (m.content.includes("Tool 'grep' does not exist") || m.content.includes('is not currently enabled for this session'))
           )
       );
       expect(grepDenied).toBe(true);
@@ -400,7 +396,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     await client.start();
     try {
       const { tool: echoNotesTool, getCallCount } = makeEchoNotesTool();
-      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTool(echoNotesTool);
+      const wrapper = makeWrapper(client, { custom: [echoNotesTool] }).setModelName('claude-sonnet-4.5');
 
       const result = await wrapper.sendAndWait('Check notes.txt with the custom tool', 15000);
       expect(result).toBeTruthy();
@@ -427,13 +423,15 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     }
   });
 
-  // Issue #345, scope item 2 (resume-scope case): a custom tool added
-  // before one `sendAndWait()` and removed via `removeTool` before the next
-  // is actually denied on the live SDK on the second call -- mirroring
-  // `removeTools_denial.yaml`'s assertions (rejection message seen, the
-  // handler's real output never leaked) but for a handler-backed tool
-  // instead of a built-in.
-  it('rejects a real call to a custom tool removed before resume', { timeout: 30000 }, async () => {
+  // SYS-REQ-028, resume-scope case: a custom tool declared at construction
+  // and disabled via `disableTools` before the next `sendAndWait()` is
+  // actually denied on the live SDK on the second call -- for a
+  // handler-backed tool instead of a built-in. Per SYS-REQ-028/028d-1 its
+  // schema stays present in `availableTools`/`tools` across the disable;
+  // only the permission layer denies it (SYS-REQ-028d), so (unlike the
+  // pre-028 `removeTool` behavior) the SDK's own "tool does not exist"
+  // fallback should never be the mechanism here.
+  it('rejects a real call to a custom tool disabled before resume', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
       'src/test/snapshots/session_wrapper/custom_tool_removeTool_denial.yaml'
@@ -444,22 +442,22 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
     await client.start();
     try {
       const { tool: echoNotesTool, getCallCount } = makeEchoNotesTool();
-      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTool(echoNotesTool);
+      const wrapper = makeWrapper(client, { custom: [echoNotesTool] }).setModelName('claude-sonnet-4.5');
 
-      // Turn 1: 'echo_notes' is allowed but the scripted turn doesn't call it yet.
+      // Turn 1: 'echo_notes' is enabled but the scripted turn doesn't call it yet.
       await wrapper.sendAndWait('Stand by', 15000);
 
-      // Remove the custom tool, then resume with a turn that tries to call it.
-      wrapper.removeTool('echo_notes');
+      // Disable the custom tool, then resume with a turn that tries to call it.
+      wrapper.disableTools('echo_notes');
       await wrapper.sendAndWait('Check notes.txt with the custom tool again', 15000);
 
-      // The handler itself must never have run post-removal.
+      // The handler itself must never have run post-disable.
       expect(getCallCount()).toBe(0);
 
-      // The live SDK must actually deny the call -- either via our
-      // `onPermissionRequest` handler's exact reject feedback, or (as with
-      // the built-in `removeTools_denial` case) the SDK's own "tool does
-      // not exist" message once the name drops out of `availableTools`.
+      // The live SDK must actually deny the call via our `onPermissionRequest`
+      // handler's reject feedback -- the schema is still declared
+      // (SYS-REQ-028d-1), so an SDK "tool does not exist" fallback would
+      // indicate a spec violation here, not an acceptable alternate path.
       const rejectionSeen = proxy.requestHistory.some(
         (r) =>
           Array.isArray(r.messages) &&
@@ -467,7 +465,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
             (m: any) =>
               m.role === 'tool' &&
               typeof m.content === 'string' &&
-              (m.content.includes("'echo_notes' is not permitted under this session") || m.content.includes('does not exist'))
+              m.content.includes("'echo_notes' is not currently enabled for this session")
           )
       );
       expect(rejectionSeen).toBe(true);
@@ -484,89 +482,21 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       );
       expect(realFileLeaked).toBe(false);
 
-      // Post-#345: removal must NOT show up in the system prompt at all --
-      // that prompt is frozen at session creation (SYS-REQ-027k) precisely
-      // so a removal like this one doesn't bust the prefix/KV cache.
-      // Enforcement lives at the permission layer (already asserted above
-      // via `rejectionSeen`); the model learns about the removal from the
-      // notice appended to the second turn's user prompt instead.
+      // SYS-REQ-028/028d-1: the disable must NOT show up in systemMessage at
+      // all -- that field is frozen at session creation and never even
+      // re-sent on resume (SYS-REQ-028g), precisely so a disable like this
+      // one doesn't bust the prefix/KV cache. Enforcement lives at the
+      // permission layer (already asserted above via `rejectionSeen`); the
+      // model learns about the disable from the per-turn enablement notice
+      // appended to the second turn's user prompt instead (SYS-REQ-028i).
       const completions = proxy.requestHistory.filter((r) => Array.isArray(r.messages));
       expect(completions.length).toBeGreaterThanOrEqual(2);
       const firstSystem = completions[0].messages.find((m: any) => m.role === 'system')?.content ?? '';
       const secondSystem = completions[1].messages.find((m: any) => m.role === 'system')?.content ?? '';
       const secondUser = [...completions[1].messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
 
-      expect(firstSystem).toContain('Only the following tools may be called: echo_notes.');
       expect(secondSystem).toBe(firstSystem);
-      expect(secondUser).toContain('Tools removed: echo_notes');
-    } finally {
-      await client.stop();
-    }
-  });
-
-  // Issue #345, cross-method regression coverage for the reviewer's
-  // blocking finding on this PR: `removeTools()` -- the built-in-shaped
-  // mutator, not its own counterpart `removeTool()` -- must also clear a
-  // custom tool added via `addTool`, keeping `availableTools`, `tools`, and
-  // the tool-usage system-prompt section in agreement on the live SDK
-  // (SYS-REQ-027h). Mirrors the test above but removes via `removeTools`.
-  it('rejects a real call to a custom tool removed via removeTools before resume, and the tool-usage prompt reflects it', { timeout: 30000 }, async () => {
-    const snapshotPath = path.resolve(
-      process.cwd(),
-      'src/test/snapshots/session_wrapper/custom_tool_removeTool_denial.yaml'
-    );
-    await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
-
-    const client = makeClient();
-    await client.start();
-    try {
-      const { tool: echoNotesTool, getCallCount } = makeEchoNotesTool();
-      const wrapper = makeWrapper(client).setModelName('claude-sonnet-4.5').addTool(echoNotesTool);
-
-      await wrapper.sendAndWait('Stand by', 15000);
-
-      // The reviewer's exact repro: remove a custom tool via removeTools(),
-      // not removeTool().
-      wrapper.removeTools('echo_notes');
-      await wrapper.sendAndWait('Check notes.txt with the custom tool again', 15000);
-
-      expect(getCallCount()).toBe(0);
-
-      const rejectionSeen = proxy.requestHistory.some(
-        (r) =>
-          Array.isArray(r.messages) &&
-          r.messages.some(
-            (m: any) =>
-              m.role === 'tool' &&
-              typeof m.content === 'string' &&
-              (m.content.includes("'echo_notes' is not permitted under this session") || m.content.includes('does not exist'))
-          )
-      );
-      expect(rejectionSeen).toBe(true);
-
-      const realFileLeaked = proxy.requestHistory.some(
-        (r) =>
-          Array.isArray(r.messages) &&
-          r.messages.some(
-            (m: any) => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('hello from the real filesystem')
-          )
-      );
-      expect(realFileLeaked).toBe(false);
-
-      // Same frozen-prefix check as the removeTool() case above -- proves
-      // _customTools was actually cleared by removeTools(), not just
-      // _tools, since a stale _customTools entry wouldn't change what
-      // availableTools/the notice derive from, but WOULD still show up in
-      // the derived `tools` dispatch array (the bug the reviewer flagged).
-      const completions = proxy.requestHistory.filter((r) => Array.isArray(r.messages));
-      expect(completions.length).toBeGreaterThanOrEqual(2);
-      const firstSystem = completions[0].messages.find((m: any) => m.role === 'system')?.content ?? '';
-      const secondSystem = completions[1].messages.find((m: any) => m.role === 'system')?.content ?? '';
-      const secondUser = [...completions[1].messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
-
-      expect(firstSystem).toContain('Only the following tools may be called: echo_notes.');
-      expect(secondSystem).toBe(firstSystem);
-      expect(secondUser).toContain('Tools removed: echo_notes');
+      expect(secondUser).toContain('No tools are currently enabled');
     } finally {
       await client.stop();
     }

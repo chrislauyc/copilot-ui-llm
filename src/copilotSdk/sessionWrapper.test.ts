@@ -65,8 +65,8 @@ function fakeTool(name: string) {
   };
 }
 
-describe('SessionWrapper._createConfig', () => {
-  it('with zero tools: denies every candidate and reports no availableTools', async () => {
+describe('SessionWrapper._createConfig (SYS-REQ-028/028a/028d-1: schema is fixed at construction)', () => {
+  it('with zero tools: availableTools is empty and every candidate is denied', async () => {
     const wrapper = new SessionWrapper();
     const config = wrapper._createConfig();
 
@@ -75,31 +75,41 @@ describe('SessionWrapper._createConfig', () => {
     await expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toMatchObject({
       kind: 'reject',
     });
-    expect(typeof config.systemMessage === 'object' ? config.systemMessage?.content : '').toContain(
-      'No tools are available'
-    );
   });
 
-  it('with one built-in tool: system-prompt section, availableTools, and permission never disagree', async () => {
-    const wrapper = new SessionWrapper().addTools('bash');
+  it('with one built-in tool: availableTools and permission agree, and both stay true after a later disableTools call (028/028d-1)', async () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
     const config = wrapper._createConfig();
 
     expect(config.availableTools).toEqual(['bash']);
-    expect(config.systemMessage?.content).toContain('bash');
     await expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toEqual({
       kind: 'approve-once',
     });
-    // A candidate not in the tool list is still denied.
     await expect(config.onPermissionRequest(readRequest(), { sessionId: 's1' })).resolves.toMatchObject({
       kind: 'reject',
     });
+
+    // Disabling the tool must NOT change the wire-level schema (028/028d-1):
+    // availableTools is re-read fresh below and must still list 'bash'.
+    wrapper.disableTools('bash');
+    const configAfterDisable = wrapper._createConfig();
+    expect(configAfterDisable.availableTools).toEqual(['bash']);
+    // But the permission layer now denies it (028d).
+    await expect(
+      configAfterDisable.onPermissionRequest(shellRequest(), { sessionId: 's1' })
+    ).resolves.toMatchObject({ kind: 'reject' });
   });
 
   it('with N mixed built-in and custom tools: every candidate resolves consistently', async () => {
-    const wrapper = new SessionWrapper().addTools('bash', 'view', 'grep', 'glob', 'edit', 'my_custom_tool');
+    const tool = fakeTool('my_custom_tool');
+    const wrapper = new SessionWrapper(undefined, {
+      builtins: ['bash', 'view', 'grep', 'glob', 'edit'],
+      custom: [tool],
+    });
     const config = wrapper._createConfig();
 
     expect(config.availableTools).toEqual(['bash', 'view', 'grep', 'glob', 'edit', 'my_custom_tool']);
+    expect(config.tools).toEqual([tool]);
     for (const req of [shellRequest(), readRequest(), customToolRequest('my_custom_tool')]) {
       await expect(config.onPermissionRequest(req, { sessionId: 's1' })).resolves.toEqual({
         kind: 'approve-once',
@@ -110,8 +120,8 @@ describe('SessionWrapper._createConfig', () => {
     });
   });
 
-  it('approval is per-call, not a standing grant: repeated calls to an allowed tool are each independently approved', async () => {
-    const wrapper = new SessionWrapper().addTools('bash');
+  it('approval is per-call, not a standing grant: repeated calls to an enabled tool are each independently approved', async () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
     const config = wrapper._createConfig();
 
     await expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toEqual({
@@ -122,238 +132,290 @@ describe('SessionWrapper._createConfig', () => {
     });
   });
 
-  it('removeTools denies the tool once _createConfig is re-derived (next-turn semantics)', async () => {
-    const wrapper = new SessionWrapper().addTools('bash');
-    const firstTurnConfig = wrapper._createConfig();
-    await expect(firstTurnConfig.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toEqual({
+  it('all construction-time tools are enabled by default (SYS-REQ-028c)', async () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash', 'view'] });
+    const config = wrapper._createConfig();
+
+    await expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toEqual({
       kind: 'approve-once',
     });
+    await expect(config.onPermissionRequest(readRequest(), { sessionId: 's1' })).resolves.toEqual({
+      kind: 'approve-once',
+    });
+  });
+});
 
-    wrapper.removeTools('bash');
-    const nextTurnConfig = wrapper._createConfig();
-    expect(nextTurnConfig.availableTools).toEqual([]);
-    await expect(nextTurnConfig.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toMatchObject({
+describe('SessionWrapper.enableTools/disableTools (SYS-REQ-028b/028c)', () => {
+  it('disableTools denies at the permission layer without touching availableTools/tools', async () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
+    wrapper.disableTools('bash');
+    const config = wrapper._createConfig();
+
+    expect(config.availableTools).toEqual(['bash']);
+    await expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toMatchObject({
       kind: 'reject',
     });
   });
 
-  it('addTool: availableTools, tools array, and permission for the custom tool never disagree', async () => {
-    const tool = fakeTool('run_gh_command');
-    const wrapper = new SessionWrapper().addTool(tool);
+  it('enableTools re-allows a previously-disabled tool', async () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
+    wrapper.disableTools('bash').enableTools('bash');
     const config = wrapper._createConfig();
 
+    await expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toEqual({
+      kind: 'approve-once',
+    });
+  });
+
+  it('a custom tool can be disabled and re-enabled the same way as a built-in', async () => {
+    const tool = fakeTool('run_gh_command');
+    const wrapper = new SessionWrapper(undefined, { custom: [tool] });
+    wrapper.disableTools('run_gh_command');
+    const config = wrapper._createConfig();
+
+    // Schema stays present regardless of enablement (028/028d).
     expect(config.availableTools).toEqual(['run_gh_command']);
     expect(config.tools).toEqual([tool]);
-    expect(config.systemMessage?.content).toContain('run_gh_command');
-    await expect(
-      config.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
-    ).resolves.toEqual({ kind: 'approve-once' });
-  });
-
-  it('addTool alongside built-ins: both show up in availableTools and tools carries only the handler-backed one', () => {
-    const tool = fakeTool('submit_clarity_check');
-    const wrapper = new SessionWrapper().addTools('bash', 'view').addTool(tool);
-    const config = wrapper._createConfig();
-
-    expect(config.availableTools).toEqual(['bash', 'view', 'submit_clarity_check']);
-    expect(config.tools).toEqual([tool]);
-  });
-
-  it('removeTool denies the custom tool once _createConfig is re-derived (next-turn semantics)', async () => {
-    const tool = fakeTool('run_gh_command');
-    const wrapper = new SessionWrapper().addTool(tool);
-    const firstTurnConfig = wrapper._createConfig();
-    await expect(
-      firstTurnConfig.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
-    ).resolves.toEqual({ kind: 'approve-once' });
-
-    wrapper.removeTool('run_gh_command');
-    const nextTurnConfig = wrapper._createConfig();
-    expect(nextTurnConfig.availableTools).toEqual([]);
-    expect(nextTurnConfig.tools).toEqual([]);
-    await expect(
-      nextTurnConfig.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
-    ).resolves.toMatchObject({ kind: 'reject' });
-  });
-
-  it('removeTool on a name never added is a no-op', () => {
-    const wrapper = new SessionWrapper().addTools('bash').removeTool('never_added');
-    const config = wrapper._createConfig();
-    expect(config.availableTools).toEqual(['bash']);
-    expect(config.tools).toEqual([]);
-  });
-
-  // Regression test for the reviewer's blocking finding on this PR
-  // (SYS-REQ-027h): a custom tool added via `addTool` but removed via the
-  // built-in-shaped `removeTools` -- not its own counterpart `removeTool` --
-  // must not leave `_customTools` stale. Before the fix, this left
-  // `availableTools: []` (derived from `_tools`) disagreeing with
-  // `tools: [tool]` (derived from `_customTools`): a handler-backed tool
-  // still in the SDK-dispatch array despite being absent from the
-  // permission allowlist and system-prompt tool section.
-  it('removeTools also clears a custom tool added via addTool, keeping availableTools/tools/permission in agreement', async () => {
-    const tool = fakeTool('run_gh_command');
-    const wrapper = new SessionWrapper().addTool(tool).removeTools('run_gh_command');
-    const config = wrapper._createConfig();
-
-    expect(config.availableTools).toEqual([]);
-    expect(config.tools).toEqual([]);
     await expect(
       config.onPermissionRequest(customToolRequest('run_gh_command'), { sessionId: 's1' })
     ).resolves.toMatchObject({ kind: 'reject' });
   });
 
-  it('removeTools only removes the named custom tool, leaving other addTool entries and built-ins intact', () => {
-    const keep = fakeTool('submit_clarity_check');
-    const drop = fakeTool('run_gh_command');
-    const wrapper = new SessionWrapper()
-      .addTools('bash')
-      .addTool(keep)
-      .addTool(drop)
-      .removeTools('run_gh_command');
+  it('throws synchronously on an unknown tool name and applies no partial state change (SYS-REQ-028b)', () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash', 'view'] });
+
+    expect(() => wrapper.disableTools('bash', 'unknown_tool')).toThrow(/unknown tool/);
+
+    // 'bash' must still be enabled -- the throw happened before any mutation
+    // was applied, not partway through the name list.
     const config = wrapper._createConfig();
-
-    expect(config.availableTools).toEqual(['bash', 'submit_clarity_check']);
-    expect(config.tools).toEqual([keep]);
+    return expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toEqual({
+      kind: 'approve-once',
+    });
   });
 
-  it('forces systemMessage into replace mode even with no caller-supplied system prompt (issue #345 follow-up: append/customize modes still let the SDK inject a live-tool-derived section)', () => {
-    const config = new SessionWrapper().addTools('bash')._createConfig();
-    expect(config.systemMessage?.mode).toBe('replace');
-    expect(config.systemMessage?.content).toContain('bash');
-  });
+  it('enableTools with an unknown name also throws synchronously, atomically', () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
+    wrapper.disableTools('bash');
 
-  it('folds tool guidance into a caller-supplied system prompt without dropping caller content, still forced into replace mode', () => {
-    const wrapper = new SessionWrapper().addTools('bash').setSystemPrompt('be terse');
+    expect(() => wrapper.enableTools('bash', 'unknown_tool')).toThrow(/unknown tool/);
+
+    // 'bash' must still be disabled -- the earlier disableTools call is not
+    // undone by the partially-attempted enableTools call.
     const config = wrapper._createConfig();
-    expect(config.systemMessage?.mode).toBe('replace');
-    expect(config.systemMessage?.content).toContain('be terse');
-    expect(config.systemMessage?.content).toContain('bash');
+    return expect(config.onPermissionRequest(shellRequest(), { sessionId: 's1' })).resolves.toMatchObject({
+      kind: 'reject',
+    });
   });
 
-  it('passes _modelName through to the derived config', () => {
-    const config = new SessionWrapper().setModelName('claude-sonnet-4.5')._createConfig();
-    expect(config.model).toBe('claude-sonnet-4.5');
+  it('a name never supplied at construction cannot be enabled -- there is no post-construction way to add a tool (SYS-REQ-028a)', () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
+    expect(() => wrapper.enableTools('view')).toThrow(/unknown tool/);
+    expect(wrapper._createConfig().availableTools).toEqual(['bash']);
   });
 });
 
-describe('SessionWrapper.sendAndWait', () => {
-  it('creates on the first call, resumes on subsequent calls against the same instance', async () => {
+describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028e/028f/028g)', () => {
+  it('the first call always creates; a second call on the same instance resumes', async () => {
     const { client, createCalls, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }).setModelName('claude-sonnet-4.5');
 
-    await wrapper.sendAndWait('hello');
+    await wrapper.sendAndWait('turn one');
     expect(createCalls).toHaveLength(1);
     expect(resumeCalls).toHaveLength(0);
 
-    await wrapper.sendAndWait('hello again');
+    await wrapper.sendAndWait('turn two');
     expect(createCalls).toHaveLength(1);
     expect(resumeCalls).toHaveLength(1);
     expect(resumeCalls[0]?.sessionId).toBe('session-0');
   });
 
-  it('produces no caller-visible config difference between the create call and a resume call', async () => {
-    const { client, createCalls, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client)
-      .addTools('bash', 'view')
+  it('resume sends only onPermissionRequest -- no tools, availableTools, systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
+    const { client, resumeCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, { workingDirectory: '/tmp/work' })
       .setSystemPrompt('be terse')
       .setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     await wrapper.sendAndWait('turn two');
 
-    const created = createCalls[0];
-    const resumed = resumeCalls[0]?.config;
-    expect(resumed?.availableTools).toEqual(created?.availableTools);
-    expect(resumed?.systemMessage).toEqual(created?.systemMessage);
-    expect(resumed?.autoApproveAll).toBe(created?.autoApproveAll);
+    const resumeConfig = resumeCalls[0]?.config;
+    expect(resumeConfig?.onPermissionRequest).toBeDefined();
+    expect(Object.keys(resumeConfig ?? {})).toEqual(['onPermissionRequest']);
   });
 
-  it('re-derives config on resume: a tool added between calls is present on the resumed config, not stale', async () => {
-    const { client, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+  it('the wire-level tools schema is byte-identical between create and every resume, even after enableTools/disableTools (SYS-REQ-028/028a)', async () => {
+    const { client, createCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash', 'view'] }).setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
-    wrapper.addTools('view');
+    wrapper.disableTools('bash').enableTools('bash').disableTools('view');
     await wrapper.sendAndWait('turn two');
 
-    expect(resumeCalls[0]?.config.availableTools).toEqual(['bash', 'view']);
+    // Since resume never re-sends `tools`/`availableTools` at all (028g),
+    // the only thing to check byte-identity against is what create sent --
+    // there is no second value to diff.
+    expect(createCalls[0]?.availableTools).toEqual(['bash', 'view']);
   });
+});
 
-  it('re-derives config on resume: a tool removed between calls is absent from the resumed config', async () => {
-    const { client, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash', 'view').setModelName('claude-sonnet-4.5');
-
-    await wrapper.sendAndWait('turn one');
-    wrapper.removeTools('view');
-    await wrapper.sendAndWait('turn two');
-
-    expect(resumeCalls[0]?.config.availableTools).toEqual(['bash']);
-  });
-
-  it('addTool called after the session has started is never rejected and the handler-backed tool applies next turn (SYS-REQ-027f)', async () => {
+describe('SessionWrapper.sendAndWait: systemMessage (SYS-REQ-028h)', () => {
+  it('is sent in customize mode, carrying the caller instructions, and never re-sent on resume', async () => {
     const { client, createCalls, resumeCalls } = fakeClient();
-    const tool = fakeTool('run_gh_command');
-    const wrapper = new SessionWrapper(client).setModelName('claude-sonnet-4.5');
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] })
+      .setSystemPrompt('you are an auditor')
+      .setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
-    expect(() => wrapper.addTool(tool)).not.toThrow();
     await wrapper.sendAndWait('turn two');
 
-    expect(createCalls[0]?.tools).toEqual([]);
-    expect(resumeCalls[0]?.config.tools).toEqual([tool]);
-    expect(resumeCalls[0]?.config.availableTools).toEqual(['run_gh_command']);
+    expect(createCalls[0]?.systemMessage?.mode).toBe('customize');
+    expect(createCalls[0]?.systemMessage?.content).toContain('you are an auditor');
+    expect(resumeCalls[0]?.config.systemMessage).toBeUndefined();
   });
 
-  it('setSystemPrompt called after the session has started is never rejected, but does not touch the frozen resumed systemMessage (SYS-REQ-027f/k) -- it reaches the model via the appended notice instead', async () => {
-    const { client, createCalls, resumeCalls, sessions } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+  it('setSystemPrompt after the session has started does not change what was already frozen at creation', async () => {
+    const { client, createCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] })
+      .setSystemPrompt('initial')
+      .setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
-    expect(() => wrapper.setSystemPrompt('be terse')).not.toThrow();
+    wrapper.setSystemPrompt('changed');
+
+    expect(createCalls[0]?.systemMessage?.content).toContain('initial');
+    expect(wrapper._createConfig().systemMessage?.content).toContain('initial');
+    expect(wrapper._createConfig().systemMessage?.content).not.toContain('changed');
+  });
+});
+
+describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/028l)', () => {
+  it('is prepended on the very first turn, before any mutation has happened', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash', 'view'] }).setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+
+    const firstSendAndWait = sessions[0]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const firstPrompt = firstSendAndWait.mock.calls[0]?.[0] as string;
+    expect(firstPrompt).toContain('Tools enabled this turn');
+    expect(firstPrompt).toContain('bash, view');
+    expect(firstPrompt.endsWith('turn one')).toBe(true);
+  });
+
+  it('is present again on the second turn even when nothing changed', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }).setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
     await wrapper.sendAndWait('turn two');
 
-    // The resumed systemMessage is byte-identical to the create call's --
-    // 'be terse' never appears there (SYS-REQ-027k).
-    expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
-    // Instead, the change is relayed as a notice appended to the prompt.
-    // `sessions[0]` backs the create call ('turn one'); `sessions[1]` backs
-    // the resume call ('turn two') -- the fake hands back a fresh session
-    // object per call, mirroring the real client/session split.
     const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
-    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0];
-    expect(secondPrompt).toContain('Additional operating instructions have also been updated');
-    expect(secondPrompt).toContain('turn two');
+    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
+    expect(secondPrompt).toContain('Tools enabled this turn');
+    expect(secondPrompt.endsWith('turn two')).toBe(true);
   });
 
-  it('setModelName called after the session has started is never rejected and applies next turn (SYS-REQ-027f)', async () => {
+  it('reflects a disableTools call made between turns', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash', 'view'] }).setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    wrapper.disableTools('view');
+    await wrapper.sendAndWait('turn two');
+
+    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
+    expect(secondPrompt).toContain('Only the following tools are currently enabled and may be called: bash.');
+  });
+
+  it('states that no tools are enabled when the subset is empty', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }).setModelName('claude-sonnet-4.5');
+    wrapper.disableTools('bash');
+
+    await wrapper.sendAndWait('turn one');
+
+    const firstSendAndWait = sessions[0]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const firstPrompt = firstSendAndWait.mock.calls[0]?.[0] as string;
+    expect(firstPrompt).toContain('No tools are currently enabled');
+  });
+
+  it('prepends into MessageOptions.prompt rather than dropping the rest of the options', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }).setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait({ prompt: 'turn one', attachments: [{ type: 'file', path: '/tmp/x.txt' }] } as never);
+
+    const firstSendAndWait = sessions[0]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const firstOptions = firstSendAndWait.mock.calls[0]?.[0] as { prompt: string; attachments: unknown[] };
+    expect(firstOptions.prompt).toContain('Tools enabled this turn');
+    expect(firstOptions.prompt.endsWith('turn one')).toBe(true);
+    expect(firstOptions.attachments).toEqual([{ type: 'file', path: '/tmp/x.txt' }]);
+  });
+
+  it('also relays a system-prompt-only change as a distinct notice', async () => {
+    const { client, sessions } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] })
+      .setSystemPrompt('be terse')
+      .setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    wrapper.setSystemPrompt('be verbose');
+    await wrapper.sendAndWait('turn two');
+
+    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
+    expect(secondPrompt).toContain("additional operating instructions changed");
+  });
+});
+
+describe('SessionWrapper.sendAndWait: mid-turn enablement race (SYS-REQ-028k)', () => {
+  it('an in-flight call is unaffected by a disableTools that lands after its permission check already ran; a later call to the same tool is denied', async () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
+    const config = wrapper._createConfig();
+
+    const firstCallResult = await config.onPermissionRequest(shellRequest(), { sessionId: 's1' });
+    expect(firstCallResult).toEqual({ kind: 'approve-once' });
+
+    wrapper.disableTools('bash');
+
+    const secondCallResult = await config.onPermissionRequest(shellRequest(), { sessionId: 's1' });
+    expect(secondCallResult).toMatchObject({ kind: 'reject' });
+  });
+});
+
+describe('SessionWrapper: misc lifecycle errors', () => {
+  it('setModelName called after the session has started is never rejected and applies next turn', async () => {
     const { client, createCalls, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }).setModelName('claude-sonnet-4.5');
 
     await wrapper.sendAndWait('turn one');
     expect(() => wrapper.setModelName('claude-opus-4.8')).not.toThrow();
     await wrapper.sendAndWait('turn two');
 
     expect(createCalls[0]?.model).toBe('claude-sonnet-4.5');
-    expect(resumeCalls[0]?.config.model).toBe('claude-opus-4.8');
+    // model isn't part of the resume payload at all (SYS-REQ-028g) -- it was
+    // only ever meaningful at creation time.
+    expect(resumeCalls[0]?.config.model).toBeUndefined();
   });
 
   it('throws a clear error rather than calling the SDK when no client was supplied', async () => {
-    const wrapper = new SessionWrapper().addTools('bash').setModelName('claude-sonnet-4.5');
+    const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] }).setModelName('claude-sonnet-4.5');
     await expect(wrapper.sendAndWait('hello')).rejects.toThrow(/no CopilotClient/);
   });
 
   it('throws a clear error rather than silently dropping model when no model name was set', async () => {
     const { client } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash');
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] });
     await expect(wrapper.sendAndWait('hello')).rejects.toThrow(/no model name was set/);
   });
 
   it('_baseConfig fields survive the create config merge alongside a set model', async () => {
     const { client, createCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client, { workingDirectory: '/tmp/work' })
-      .addTools('bash')
-      .setModelName('claude-sonnet-4.5');
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, { workingDirectory: '/tmp/work' }).setModelName(
+      'claude-sonnet-4.5'
+    );
 
     await wrapper.sendAndWait('hello');
 
@@ -362,122 +424,10 @@ describe('SessionWrapper.sendAndWait', () => {
   });
 });
 
-describe('SessionWrapper SDK-footgun regression tests', () => {
-  it('never drops systemMessage on resume (issue #208: resumeSession does not inherit it from the SDK)', async () => {
-    const { client, createCalls, resumeCalls } = fakeClient();
-    const wrapper = new SessionWrapper(client)
-      .addTools('bash')
-      .setSystemPrompt('be terse')
-      .setModelName('claude-sonnet-4.5');
-
-    await wrapper.sendAndWait('turn one');
-    await wrapper.sendAndWait('turn two');
-
-    // The regression this guards: resumeSession does not inherit systemMessage
-    // from the session being resumed, so a resumeConfig that forgets to
-    // re-pass it silently loses it. SessionWrapper always re-derives and
-    // re-passes systemMessage explicitly, so it must be present -- and equal
-    // to the create call's -- on every resume, not just the first turn.
-    expect(createCalls[0]?.systemMessage).toBeDefined();
-    expect(resumeCalls[0]?.config.systemMessage).toBeDefined();
-    expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
-  });
-
-  it('always forces systemMessage into replace mode -- no mode/sections choice reaches the SDK -- and stays byte-identical across a tool-list change (issue #345 follow-up: append/customize modes still let the SDK inject a live-tool-derived section, which is exactly what replace mode exists to prevent)', async () => {
-    const { client, createCalls, resumeCalls, sessions } = fakeClient();
-    const wrapper = new SessionWrapper(client)
-      .addTools('bash')
-      .setSystemPrompt('you are an auditor')
-      .setModelName('claude-sonnet-4.5');
-
-    await wrapper.sendAndWait('turn one');
-    wrapper.addTools('view'); // changes the tool list between calls
-    await wrapper.sendAndWait('turn two');
-
-    // #345 follow-up: `_createConfig()` no longer offers append/customize at
-    // all -- every session, regardless of what the caller passed to
-    // `setSystemPrompt`, gets `mode: 'replace'` so nothing SDK-managed (in
-    // particular no live-`availableTools`-derived tool_instructions section)
-    // rides along in the outgoing systemMessage. The entire object -- mode
-    // and content -- must still be byte-identical create-to-resume. The
-    // tool-list change is instead visible in `availableTools` (still
-    // re-derived, see the SYS-REQ-027d test above) and relayed to the model
-    // via a notice appended to the resumed turn's prompt (SYS-REQ-027k).
-    const created = createCalls[0]?.systemMessage;
-    const resumed = resumeCalls[0]?.config.systemMessage;
-    expect(resumed).toEqual(created);
-    expect(created?.mode).toBe('replace');
-    expect(created?.mode === 'replace' ? created.content : '').toContain('bash');
-    expect(created?.mode === 'replace' ? created.content : '').toContain('you are an auditor');
-
-    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
-    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0];
-    expect(secondPrompt).toContain('Tools added: view');
-  });
-});
-
-describe('SessionWrapper resume update notice (SYS-REQ-027k, issue #345)', () => {
-  it('appends no notice when nothing changed between turns', async () => {
-    const { client, sessions } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
-
-    await wrapper.sendAndWait('turn one');
-    await wrapper.sendAndWait('turn two');
-
-    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
-    expect(resumedSendAndWait.mock.calls[0]?.[0]).toBe('turn two');
-  });
-
-  it('reports both additions and removals in the same notice', async () => {
-    const { client, sessions } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash', 'view').setModelName('claude-sonnet-4.5');
-
-    await wrapper.sendAndWait('turn one');
-    wrapper.addTools('grep').removeTools('view');
-    await wrapper.sendAndWait('turn two');
-
-    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
-    const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
-    expect(secondPrompt).toContain('Tools added: grep');
-    expect(secondPrompt).toContain('Tools removed: view');
-    expect(secondPrompt.endsWith('turn two')).toBe(true);
-  });
-
-  it('prepends the notice into MessageOptions.prompt rather than dropping the rest of the options', async () => {
-    const { client, sessions } = fakeClient();
-    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
-
-    await wrapper.sendAndWait('turn one');
-    wrapper.addTools('view');
-    await wrapper.sendAndWait({ prompt: 'turn two', attachments: [{ type: 'file', path: '/tmp/x.txt' }] } as never);
-
-    const resumedSendAndWait = sessions[1]?.sendAndWait as ReturnType<typeof vi.fn>;
-    const secondOptions = resumedSendAndWait.mock.calls[0]?.[0] as { prompt: string; attachments: unknown[] };
-    expect(secondOptions.prompt).toContain('Tools added: view');
-    expect(secondOptions.prompt.endsWith('turn two')).toBe(true);
-    expect(secondOptions.attachments).toEqual([{ type: 'file', path: '/tmp/x.txt' }]);
-  });
-});
-
-describe('SessionWrapper side-door surface (SYS-REQ-027g)', () => {
-  it('exposes no method that could bind policy/config to a session it did not create', () => {
-    // Enumerates the intended public API. If a `registerSessionPolicy`-style
-    // side door is ever added, this list must grow to match it -- catching
-    // that as a deliberate, reviewable diff rather than a silent addition.
-    const allowedPublicMethods = new Set([
-      'addTools',
-      'removeTools',
-      'addTool',
-      'removeTool',
-      'setSystemPrompt',
-      'setModelName',
-      'sendAndWait',
-    ]);
-    // `_createConfig` is intentionally public (tests call it directly) but is
-    // a pure derivation from own state, not an adoption mechanism -- excluded
-    // from `allowedPublicMethods` on purpose so it's visible here as the one
-    // deliberate exception rather than silently allowed by the loop below.
-    const excludedFromCheck = new Set(['constructor', '_createConfig']);
+describe('SessionWrapper side-door surface (SYS-REQ-028e/028j)', () => {
+  it('exposes no method that could bind policy/config to a session it did not create, and no post-construction tool-adding method', () => {
+    const allowedPublicMethods = new Set(['enableTools', 'disableTools', 'setSystemPrompt', 'setModelName', 'sendAndWait']);
+    const excludedFromCheck = new Set(['constructor', '_createConfig', '_setEnablement']);
 
     const actualMethods = Object.getOwnPropertyNames(SessionWrapper.prototype).filter(
       (name) => !excludedFromCheck.has(name)
