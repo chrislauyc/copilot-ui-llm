@@ -153,8 +153,8 @@ governed by subset membership evaluated at the permission layer (SYS-REQ-028d).
   system message mode are held constant (re-confirms SYS-REQ-027k still
   holds under `customize`).
 - The `tools` field is *not* stable across resume when tools are
-  added/removed via the current `addTool` mechanism — appending a tool
-  changes the bytes of that field on the next request.
+  added/removed via the pre-028 `addTool`/`removeTool` mechanism — appending
+  a tool changes the bytes of that field on the next request.
 - Under `customize` mode, system message text was identical across two calls
   with an identical tool list but opposite `onPermissionRequest` decisions
   (allow vs. deny) — confirms permission enforcement is out-of-band from the
