@@ -438,13 +438,33 @@ export class SessionWrapper {
       this._frozenSystemMessage = config.systemMessage;
       this._session = await this._client.createSession({ ...this._baseConfig, ...config });
     } else {
-      // Resuming: the ONLY field sent is onPermissionRequest (SYS-REQ-028g).
-      // Everything else -- tools, availableTools, systemMessage, model,
-      // _baseConfig -- was already fixed at creation and is omitted here
-      // rather than re-sent, since none of it may legitimately differ under
-      // this spec.
+      // Resuming: `onPermissionRequest` is the only field this spec requires
+      // (SYS-REQ-028g) to differ in *purpose* across resume, but SYS-REQ-028g
+      // also carves out an exception for fields "the SDK requires ... to be
+      // present" -- sent "byte-identical to what was sent at creation".
+      // Verified against the live SDK: `tools` and `availableTools` fall
+      // into that carve-out for handler-backed custom tools. The SDK does
+      // not retain custom tool handlers across `resumeSession` the way it
+      // retains built-ins by name -- omitting them makes the SDK believe the
+      // custom tool no longer exists and short-circuit with its own "does
+      // not exist" rejection, which never reaches `_onPermissionRequest` and
+      // so bypasses SYS-REQ-028d enforcement entirely for custom tools.
+      // Re-sending both here byte-identical to `_createConfig()`'s
+      // construction-time values keeps this compliant with SYS-REQ-028/
+      // 028d-1 (the wire-level set is unchanged, just re-declared).
+      //
+      // `autoApproveAll: false` must also be explicit here: `boundary.ts`'s
+      // `CopilotClient.resumeSession` override defaults `autoApproveAll` to
+      // `true` whenever it's omitted, which swaps in its own always-approve
+      // handler and silently discards whatever `onPermissionRequest` we pass
+      // -- defeating SYS-REQ-028d enforcement on every resumed turn (the
+      // disabled-tool integration tests catch this: the tool actually ran).
+      const resumeConfig = this._createConfig();
       this._session = await this._client.resumeSession(this._session.sessionId, {
         onPermissionRequest: this._onPermissionRequest,
+        autoApproveAll: false,
+        tools: resumeConfig.tools,
+        availableTools: resumeConfig.availableTools,
       });
     }
 
