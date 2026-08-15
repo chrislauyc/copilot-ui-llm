@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sendAndWaitWithAbort, STALL_TIMEOUT_MS } from '../utils/toolCallEnforcement';
+import { SessionWrapper } from '../copilotSdk/sessionWrapper';
+
+function makeWrapper(client: unknown, toolNames: string[] = ['my_tool']): SessionWrapper {
+  return new SessionWrapper(client as any, { builtins: toolNames }, {})
+    .setModelName('test-model')
+    .setSystemPrompt('');
+}
 
 /**
  * sendAndWaitWithAbort's stall watchdog resets its "last event" clock on any
@@ -49,7 +56,8 @@ describe('tool-execution silence misdiagnosed as stall', () => {
       })),
     } as any;
 
-    const promise = sendAndWaitWithAbort(session, { prompt: 'hi' } as any, TOOL_EXECUTION_DURATION_MS + 60000);
+    const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+    const promise = sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, TOOL_EXECUTION_DURATION_MS + 60000);
 
     // Fixed behavior (issue #188/#191): the watchdog now knows a tool is
     // actively running and suspends the silence check for that span, so no
@@ -78,7 +86,8 @@ describe('tool-execution silence misdiagnosed as stall', () => {
       })),
     } as any;
 
-    const promise = sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+    const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+    const promise = sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, 300000);
     await vi.advanceTimersByTimeAsync(FAST_TOOL_DURATION_MS + 1000);
     await expect(promise).resolves.toBeUndefined();
   });
