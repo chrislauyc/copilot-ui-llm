@@ -92,7 +92,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
     });
 
     it('does not fire the stall timer if events keep arriving (resets the silence clock)', async () => {
-      let eventHandler: (() => void) | undefined;
+      let eventHandler: ((e: unknown) => void) | undefined;
       const session = {
         sessionId: 's3',
         on: vi.fn().mockImplementation((handler) => {
@@ -103,7 +103,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
           // Simulate periodic activity (e.g. streaming deltas) that should
           // keep resetting the stall clock, then resolve just past the
           // point where a naive one-shot timer would have already fired.
-          const interval = setInterval(() => eventHandler?.(), STALL_TIMEOUT_MS - 10000);
+          const interval = setInterval(() => eventHandler?.({ type: 'assistant.message_delta', data: {} }), STALL_TIMEOUT_MS - 10000);
           setTimeout(() => {
             clearInterval(interval);
             resolve(undefined);
@@ -111,7 +111,8 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         })),
       } as any;
 
-      const promise = sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 600000);
+      const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+      const promise = sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, 600000);
       await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 25000);
       await expect(promise).resolves.toBeUndefined();
     });
@@ -556,7 +557,8 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         }),
       } as any;
 
-      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+      const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+      await sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, 300000);
 
       expect(logSpy).toHaveBeenCalledWith('[sendAndWaitWithAbort] tool used: view');
       expect(logSpy).toHaveBeenCalledWith('[sendAndWaitWithAbort] tool used: bash');
@@ -580,7 +582,8 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         }),
       } as any;
 
-      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+      const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+      await sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, 300000);
 
       const usageLogCalls = logSpy.mock.calls.filter((c: unknown[]) => String(c[0]).includes('[UsageTelemetry]'));
       expect(usageLogCalls).toHaveLength(3);
@@ -601,7 +604,8 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         }),
       } as any;
 
-      const promise = sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+      const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+      const promise = sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, 300000);
       const assertion = expect(promise).rejects.toMatchObject({ isStall: true });
       await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
       await assertion;
@@ -627,7 +631,8 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         }),
       } as any;
 
-      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+      const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+      await sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, 300000);
 
       // Never silently logs "tool used: undefined" or "tool used: ".
       expect(logSpy.mock.calls.some((c: unknown[]) => String(c[0]).includes('tool used:'))).toBe(false);
@@ -652,7 +657,8 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         }),
       } as any;
 
-      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 300000);
+      const mockClient = { createSession: vi.fn().mockResolvedValue(session) } as any;
+      await sendAndWaitWithAbort(makeWrapper(mockClient), { prompt: 'hi' } as any, 300000);
 
       expect(logSpy.mock.calls.some((c: unknown[]) => String(c[0]).includes('[UsageTelemetry]'))).toBe(false);
       const shapeErrors = errorSpy.mock.calls.filter((c: unknown[]) => String(c[0]).includes('UNEXPECTED EVENT SHAPE'));
