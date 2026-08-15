@@ -318,6 +318,15 @@ export class SessionWrapper {
    * before the prompt is sent, so a listener attached inside it does not
    * miss anything.
    */
+  // TODO(#78): audit flags SYS-REQ-028j tension: the spec text says any
+  // module other than SessionWrapper reading/writing the CopilotSession
+  // directly is a violation, with no read-only carve-out. This getter (and
+  // `onSessionReady` below) exposes the live session to gateLoop.ts and
+  // toolCallEnforcement.ts. Not resolving now per owner direction (spec
+  // modifications are forbidden without sign-off) -- needs a decision on
+  // whether SYS-REQ-028j should be amended to carve out read-only access /
+  // `onSessionReady`-based listener attachment, or whether this surface
+  // should be restricted instead.
   get session(): CopilotSession | undefined {
     return this._session;
   }
@@ -344,6 +353,17 @@ export class SessionWrapper {
    * (issue #208), so this is what every subsequent nudge/stall retry
    * re-sends. Passing anything else silently drops the original prompt on
    * the first retry.
+   *
+   * TODO(#78): audit flags SYS-REQ-028f tension: the spec states
+   * constructing a new `SessionWrapper` shall always result in
+   * `client.createSession(...)`, never a resume, with resuming only
+   * happening by reusing the wrapper instance that did the creating. This
+   * `adopt()` escape hatch builds a *new* wrapper around a session it did
+   * not create, so its first `sendAndWait()` always takes the resume path.
+   * Not resolving now per owner direction (spec modifications are
+   * forbidden without sign-off) -- needs a decision on whether
+   * SYS-REQ-028f should be amended to document this escape hatch as an
+   * explicit carve-out, or whether an alternative should replace it.
    */
   static adopt(
     session: CopilotSession,
