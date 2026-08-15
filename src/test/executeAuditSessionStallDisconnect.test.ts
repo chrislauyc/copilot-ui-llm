@@ -81,7 +81,7 @@ describe('executeAuditSession: session is always disconnected once the turn comp
 
     const result = await executeAuditSession(
       '/tmp/does-not-matter',
-      {} as any,
+      { model: 'test-model' } as any,
       'You are an auditor.',
       tool,
       'Audit this change.',

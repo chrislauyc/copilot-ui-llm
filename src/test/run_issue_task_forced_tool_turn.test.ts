@@ -20,6 +20,10 @@ describe('scripts/run-issue-task.ts', () => {
   });
 
   it('forces the same RUN_GH_COMMAND_TOOL_NAME tool that was previously only advertised, not enforced', () => {
-    expect(source).toMatch(/runForcedToolTurnUntilTimeout\(\s*session,\s*executionConfig,\s*RUN_GH_COMMAND_TOOL_NAME/);
+    // `runForcedToolTurnUntilTimeout` now takes a `SessionWrapper` instead of
+    // a raw `session, executionConfig` pair (issue #359 / #346's remaining
+    // scope) -- the wrapper owns session creation/resume, so the call site
+    // passes `wrapper` in that slot instead.
+    expect(source).toMatch(/runForcedToolTurnUntilTimeout\(\s*wrapper,\s*RUN_GH_COMMAND_TOOL_NAME/);
   });
 });
