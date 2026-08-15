@@ -477,7 +477,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(resumeCallCount).toBe(2);
       // ...and only because *that* resume attempt also stalled does recovery
       // fall back to a fresh wrapper and resend the *original* prompt.
-      expect(sentPrompts[3].endsWith('test prompt')).toBe(true);
+      expect(sentPrompts[3]!.endsWith('test prompt')).toBe(true);
       // One createSession call for turn 1's own wrapper, one for the
       // fresh-fallback wrapper's first send.
       expect(mockClient.createSession).toHaveBeenCalledTimes(2);
