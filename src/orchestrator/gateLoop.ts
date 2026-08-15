@@ -2422,23 +2422,33 @@ export const handleGateLoop = async (
                   `[GateLoop] SYS-REQ-004: No tool call detected on first turn. Attempting one narrowed retry before failing MutationGate.`,
                   LogLevel.WARN,
                 );
-                // Disabled pending issue #359 scope decision: `session` here is a
-                // long-lived, multi-turn session created with its own
-                // `onPermissionRequest: handleGateRunPermission` (see
-                // `loopSessionOptions` above). `runForcedToolTurnUntilTimeout` now
-                // requires a `SessionWrapper`, and `SessionWrapper.adopt()` (see its
-                // docstring) would silently replace `handleGateRunPermission` with
-                // the wrapper's own permission handler on every resumed retry turn --
-                // a real enforcement change, not a mechanical signature fix. Left
-                // commented out rather than adopted with a type escape hatch until
-                // that's explicitly resolved; the surrounding MutationGate failure
-                // path below still applies when this retry is skipped.
-                /*
+                // `session` here is a long-lived, multi-turn session created
+                // with its own `onPermissionRequest: handleGateRunPermission`
+                // (see `loopSessionOptions` above). `SessionWrapper.adopt()`
+                // (see its docstring) always installs the wrapper's own
+                // enabled-tool-based `onPermissionRequest` on every resumed
+                // retry turn instead of `handleGateRunPermission` -- but for
+                // THIS one narrowed retry turn that's exactly what we want:
+                // the wrapper is constructed with only the same
+                // `loopSessionOptions.tools` the original session already
+                // exposed, all enabled, so the wrapper approves precisely the
+                // same tool surface `handleGateRunPermission` would have
+                // approved for a forced tool call here. Scoped to this single
+                // adopted turn only -- `session` is repointed back below, so
+                // subsequent turns keep going through `handleGateRunPermission`
+                // as before.
                 try {
+                  const retryWrapper = SessionWrapper.adopt(
+                    session,
+                    client,
+                    { custom: (loopSessionOptions.tools ?? []) as Tool[] },
+                    {},
+                    loopExecutionConfig.model,
+                    undefined,
+                  );
                   const retryResult = (await Promise.race([
                     runForcedToolTurnUntilTimeout(
-                      session,
-                      loopExecutionConfig,
+                      retryWrapper,
                       (loopSessionOptions.tools
                         ?.map(
                           (t) =>
@@ -2449,12 +2459,10 @@ export const handleGateLoop = async (
                         .filter(Boolean) as string[]) || [],
                       currentPrompt,
                       {
-                        client,
                         abortSignal: abortController.signal,
                         timeoutMs: 600000,
                         maxRetries: 1,
                         getResult: () => undefined,
-                        tools: loopSessionOptions.tools,
                       },
                     ),
                     abortPromise,
@@ -2507,7 +2515,6 @@ export const handleGateLoop = async (
                     LogLevel.WARN,
                   );
                 }
-                */
               }
 
               if (

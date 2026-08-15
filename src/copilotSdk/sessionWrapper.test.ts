@@ -468,7 +468,18 @@ describe('SessionWrapper: misc lifecycle errors', () => {
 
 describe('SessionWrapper side-door surface (SYS-REQ-028e/028j)', () => {
   it('exposes no method that could bind policy/config to a session it did not create, and no post-construction tool-adding method', () => {
-    const allowedPublicMethods = new Set(['enableTools', 'disableTools', 'setSystemPrompt', 'setModelName', 'sendAndWait']);
+    const allowedPublicMethods = new Set([
+      'enableTools',
+      'disableTools',
+      'setSystemPrompt',
+      'setModelName',
+      'sendAndWait',
+      // Read-only view of the wrapper's own live session (issue #359) --
+      // exposes no way to bind policy/config to a session the wrapper did
+      // not create, so it doesn't reopen the #327 "no side door" guarantee.
+      // See the getter's docstring in sessionWrapper.ts.
+      'session',
+    ]);
     const excludedFromCheck = new Set(['constructor', '_createConfig', '_setEnablement']);
 
     const actualMethods = Object.getOwnPropertyNames(SessionWrapper.prototype).filter(
