@@ -419,7 +419,17 @@ export async function executeAuditSession<T>(
     // instructions instead.
     const wrapper = new SessionWrapper(
       client,
-      { custom: sessionSettings.tools },
+      // `builtins` must be declared here (issue #77) -- SessionWrapper's
+      // `_onPermissionRequest` gate only auto-approves construction-time
+      // `_enabledTools`, and `autoApproveAll` is always `false` for wrapped
+      // sessions (unlike `client.createSession()`'s `true` default on
+      // `main`). Without this, every SDK built-in tool call (bash/view/
+      // edit/grep/glob) is rejected, leaving `run_terminal_docker` as the
+      // model's only path -- which requires a Docker container not present
+      // in CI. `view`/`grep`/`glob` share permission-request kind `'read'`
+      // (see `_kindSiblings`), so all three must be listed together or none
+      // of them will be approved.
+      { builtins: ['bash', 'view', 'edit', 'grep', 'glob'], custom: sessionSettings.tools },
       {
         ...(sessionSettings.provider ? { provider: sessionSettings.provider } : {}),
         reasoningSummary: sessionSettings.reasoningSummary,
