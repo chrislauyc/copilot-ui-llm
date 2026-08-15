@@ -89,11 +89,29 @@ governed by subset membership evaluated at the permission layer (SYS-REQ-028d).
   cross-process reconstruction is out of scope for this spec — see Open
   Questions).
 
-- **SYS-REQ-028g:** On resume, the only config field `SessionWrapper` **shall**
-  pass to the SDK is `onPermissionRequest`. All other fields (`tools`,
-  `systemMessage`, `model`, etc.) **shall** be omitted from the resume call
-  or, where the SDK requires them to be present, **shall** be sent
-  byte-identical to what was sent at creation.
+- **SYS-REQ-028g:** On resume, `SessionWrapper` **shall** pass to the SDK
+  `onPermissionRequest` plus only whichever fields the SDK actually requires
+  to be present for a correct resume, and any such field **shall** be sent
+  byte-identical to what was sent at creation. `model` and any `_baseConfig`
+  field **shall** be omitted, since none of them may legitimately differ
+  across resume under this spec. Verified against the live SDK (not just a
+  mocked double): `tools`, `availableTools`, and `systemMessage` all fall
+  into the required-by-the-SDK category and **must** also be resent on every
+  resume. For `tools`/`availableTools`: the SDK does not retain
+  handler-backed custom tools across `resumeSession` the way it retains
+  built-ins by name; omitting them makes the SDK itself believe a
+  construction-time custom tool no longer exists and short-circuit with its
+  own "does not exist" rejection, which never reaches `onPermissionRequest`
+  and so silently defeats SYS-REQ-028d enforcement for custom tools. For
+  `systemMessage`: `resumeSession` does not inherit it from the session
+  being resumed (issue #208) -- omitting it silently falls back to the SDK's
+  default `copilot-cli` system prompt for the rest of the turn, discarding
+  SYS-REQ-028h's frozen prompt without any error. `autoApproveAll: false`
+  **shall** also be passed explicitly on resume: `boundary.ts`'s
+  `CopilotClient.resumeSession` override defaults `autoApproveAll` to `true`
+  whenever it's omitted, which swaps in its own always-approve handler and
+  silently discards whatever `onPermissionRequest` was passed, defeating
+  SYS-REQ-028d on every resumed turn.
 
 - **SYS-REQ-028h:** `systemMessage` **shall** be configured in `customize`
   mode (superseding SYS-REQ-027k's `replace` mode). `SessionWrapper` **shall
@@ -139,8 +157,8 @@ governed by subset membership evaluated at the permission layer (SYS-REQ-028d).
   system message mode are held constant (re-confirms SYS-REQ-027k still
   holds under `customize`).
 - The `tools` field is *not* stable across resume when tools are
-  added/removed via the current `addTool` mechanism — appending a tool
-  changes the bytes of that field on the next request.
+  added/removed via the pre-028 `addTool`/`removeTool` mechanism — appending
+  a tool changes the bytes of that field on the next request.
 - Under `customize` mode, system message text was identical across two calls
   with an identical tool list but opposite `onPermissionRequest` decisions
   (allow vs. deny) — confirms permission enforcement is out-of-band from the
@@ -222,9 +240,11 @@ a direct, nameable assertion, not general-purpose fuzzing.
     `SessionWrapper` instance is always `createSession`, never `resumeSession`,
     regardless of any external session ID the caller might supply.
 11. **Resume payload minimality (028g):** on a second `sendAndWait()` call,
-    assert the `resumeSession` call includes only `onPermissionRequest` plus
-    any SDK-mandatory fields, and that any mandatory field present is
-    byte-identical to the value sent at creation.
+    assert the `resumeSession` call includes only `onPermissionRequest`,
+    `autoApproveAll: false`, and the SDK-mandatory `tools`/`availableTools`/
+    `systemMessage` fields — never `model` or any `_baseConfig` field — and
+    that `tools`/`availableTools`/`systemMessage` are byte-identical to the
+    values sent at creation.
 12. **`systemMessage` mode (028h):** assert `systemMessage` is sent with
     `mode: 'customize'`, and that no hand-authored full-baseline string is
     constructed or maintained by `SessionWrapper` itself.
