@@ -301,6 +301,91 @@ export class SessionWrapper {
   }
 
   /**
+   * Read-only view of the live SDK session this wrapper is currently
+   * holding, or `undefined` before the first `sendAndWait()` call
+   * (SYS-REQ-028f: construction never creates a session by itself).
+   *
+   * This is read-only exposure of a session the wrapper already created
+   * itself -- not a way to inject config onto a session it didn't create --
+   * so it does not reopen the #327 "no side door" guarantee. Callers that
+   * need to attach event listeners (tool-call tracking, stall silence
+   * tracking, etc.) should do so via the `onSessionReady` callback on
+   * `sendAndWait()` rather than reading this getter after the fact: a
+   * resume replaces the underlying `CopilotSession` object, and by the time
+   * `sendAndWait()`'s returned promise resolves, every event for that turn
+   * has already fired. `onSessionReady` is invoked synchronously with the
+   * (possibly brand-new) session object right after it's created/resumed,
+   * before the prompt is sent, so a listener attached inside it does not
+   * miss anything.
+   */
+  // TODO(#78): audit flags SYS-REQ-028j tension: the spec text says any
+  // module other than SessionWrapper reading/writing the CopilotSession
+  // directly is a violation, with no read-only carve-out. This getter (and
+  // `onSessionReady` below) exposes the live session to gateLoop.ts and
+  // toolCallEnforcement.ts. Not resolving now per owner direction (spec
+  // modifications are forbidden without sign-off) -- needs a decision on
+  // whether SYS-REQ-028j should be amended to carve out read-only access /
+  // `onSessionReady`-based listener attachment, or whether this surface
+  // should be restricted instead.
+  get session(): CopilotSession | undefined {
+    return this._session;
+  }
+
+  /**
+   * Adopts an already-created `CopilotSession` (e.g. from
+   * `createHardenedSession`) into a new `SessionWrapper`, so callers that
+   * must create their session through a `SessionPolicy` (audit-codebase.ts,
+   * run-issue-task.ts, gateLoop.ts's SYS-REQ-004 retry site -- see issue
+   * #359) can still use `runForcedToolTurn`/`runForcedToolTurnUntilTimeout`.
+   *
+   * This is an escape hatch, not a general-purpose constructor path: it
+   * exists only because `SessionWrapper` cannot itself express
+   * `SessionPolicy`'s `autoApprovedTools`/`onPermissionRequest` gating
+   * (that enforcement already happened at `createSession` time and is
+   * baked into `session`). `toolsConfig`/`baseConfig` must describe the
+   * SAME tool set the session was actually created with -- they are only
+   * used for this wrapper's own bookkeeping (`_allToolNames`,
+   * `enableTools`/`disableTools` restriction between nudge retries) and
+   * for resend-on-resume (`_createConfig()`), not to re-derive permissions.
+   *
+   * `frozenSystemMessage` must be the exact `systemMessage` value sent at
+   * the session's original creation -- `resumeSession` does not inherit it
+   * (issue #208), so this is what every subsequent nudge/stall retry
+   * re-sends. Passing anything else silently drops the original prompt on
+   * the first retry.
+   *
+   * TODO(#78): audit flags SYS-REQ-028f tension: the spec states
+   * constructing a new `SessionWrapper` shall always result in
+   * `client.createSession(...)`, never a resume, with resuming only
+   * happening by reusing the wrapper instance that did the creating. This
+   * `adopt()` escape hatch builds a *new* wrapper around a session it did
+   * not create, so its first `sendAndWait()` always takes the resume path.
+   * Not resolving now per owner direction (spec modifications are
+   * forbidden without sign-off) -- needs a decision on whether
+   * SYS-REQ-028f should be amended to document this escape hatch as an
+   * explicit carve-out, or whether an alternative should replace it.
+   */
+  static adopt(
+    session: CopilotSession,
+    client: CopilotClient,
+    toolsConfig: SessionWrapperToolsConfig,
+    baseConfig: SessionWrapperBaseConfig,
+    modelName: string,
+    frozenSystemMessage: SessionConfig['systemMessage'] | undefined,
+  ): SessionWrapper {
+    const wrapper = new SessionWrapper(client, toolsConfig, baseConfig);
+    wrapper._session = session;
+    wrapper._frozenSystemMessage = frozenSystemMessage;
+    wrapper._modelName = modelName;
+    // Prevents a spurious "system prompt changed" notice on the first
+    // resume: there is no prior wrapper-issued turn to have diverged from,
+    // since the adopted session's initial prompt was sent by
+    // `createHardenedSession`, not this wrapper.
+    wrapper._announcedSystemPrompt = wrapper._systemPrompt;
+    return wrapper;
+  }
+
+  /**
    * Enables one or more construction-time tools (SYS-REQ-028c). Mutates only
    * the private enabled subset -- the wire-level `tools`/`availableTools`
    * sent to the SDK never change (SYS-REQ-028/028d-1). If called after a
@@ -459,7 +544,18 @@ export class SessionWrapper {
    * outgoing turn, including the first -- not only turns following a
    * mutation.
    */
-  async sendAndWait(prompt: string | MessageOptions, timeout?: number): Promise<AssistantMessageEvent | undefined> {
+  async sendAndWait(
+    prompt: string | MessageOptions,
+    timeout?: number,
+    /**
+     * Invoked synchronously with the live session right after it's
+     * created/resumed for this call, before the prompt is sent -- see the
+     * `session` getter's doc comment for why this exists instead of relying
+     * on that getter alone. Optional: most callers don't need per-turn
+     * listeners and can just await the result.
+     */
+    onSessionReady?: (session: CopilotSession) => void
+  ): Promise<AssistantMessageEvent | undefined> {
     if (!this._client) {
       throw new Error('SessionWrapper.sendAndWait: no CopilotClient was supplied to this instance.');
     }
@@ -497,6 +593,7 @@ export class SessionWrapper {
       const config = this._createConfig();
       this._frozenSystemMessage = config.systemMessage;
       this._session = await this._client.createSession({ ...this._baseConfig, ...config });
+      onSessionReady?.(this._session);
     } else {
       // Resuming: `onPermissionRequest` is the only field this spec requires
       // (SYS-REQ-028g) to differ in *purpose* across resume, but SYS-REQ-028g
@@ -542,6 +639,7 @@ export class SessionWrapper {
         availableTools: resumeConfig.availableTools,
         systemMessage: this._frozenSystemMessage,
       });
+      onSessionReady?.(this._session);
     }
 
     this._announcedSystemPrompt = this._systemPrompt;
