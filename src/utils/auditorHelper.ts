@@ -1,5 +1,6 @@
 import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
-import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
+import { CopilotClient, SdkProviderConfig, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
+import { SessionWrapper } from '../copilotSdk/sessionWrapper';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../config/tools';
@@ -402,42 +403,51 @@ export async function executeAuditSession<T>(
       abortSignal
     );
 
-    let session: CopilotSession;
-    try {
-      // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
-      session = await client.createSession(sessionSettings as SessionConfig & { autoApproveAll?: boolean });
-    } catch (e) {
-      console.warn(`[executeAuditSession] createSession() failed: ${e}`);
-      throw e;
-    }
-    sessionId = session.sessionId;
-    onSessionId?.(session.sessionId);
-
-    const turnResult = await runForcedToolTurnUntilTimeout(session, executionConfig, toolName, userPrompt, {
+    // Constructs a SessionWrapper up front instead of calling
+    // client.createSession() directly (issue #346/#359) -- this session is
+    // created fresh for this one audit turn (no continuation/adoption
+    // concern, unlike gateLoop.ts's SYS-REQ-004 retry site), so this is a
+    // straightforward drop-in. The eslint-disable for issue #246 item 7 no
+    // longer applies once this routes through the sanctioned wrapper same
+    // as everything else.
+    //
+    // sessionSettings.systemMessage was previously sent verbatim in
+    // `replace` mode (TOOL_USAGE_BOILERPLATE + systemPrompt, nothing else).
+    // SessionWrapper only supports `customize` mode (SYS-REQ-028h supersedes
+    // the old `replace`-mode requirement, SYS-REQ-027k) -- `setSystemPrompt`
+    // folds the same content in as customize-mode's caller-supplied
+    // instructions instead.
+    const wrapper = new SessionWrapper(
       client,
+      { custom: sessionSettings.tools },
+      {
+        ...(sessionSettings.provider ? { provider: sessionSettings.provider } : {}),
+        reasoningSummary: sessionSettings.reasoningSummary,
+        streaming: sessionSettings.streaming,
+      },
+    )
+      .setModelName(sessionSettings.model)
+      .setSystemPrompt((sessionSettings.systemMessage as { content: string }).content);
+
+    const turnResult = await runForcedToolTurnUntilTimeout(wrapper, toolName, userPrompt, {
       abortSignal,
       timeoutMs,
       maxRetries,
       getResult: () => result,
-      tools: sessionSettings.tools,
       // Explicit, not left to the [toolName]-only default: runForcedToolTurnUntilTimeout's
-      // nudge-retry resume rebuilds its SessionPolicy from opts.availableTools
-      // (see toolCallEnforcement.ts) each time it resumes, so without this the
+      // nudge-retry restricts the wrapper's enabled-tool subset (see
+      // toolCallEnforcement.ts) each time it resumes, so without this the
       // resumed session would silently lose run_terminal_docker from its
       // allowlist after the first nudge, even though it's still present in
-      // `tools` above (issue #299). (There is no separate stall-recovery path
-      // in this function -- only the nudge-retry loop -- fixed alongside this
-      // in toolCallEnforcement.ts, which previously ignored opts.availableTools
-      // here and always collapsed the resume policy to just [toolName].)
+      // the wrapper's construction-time tool set (issue #299).
       availableTools: [toolName, RUN_TERMINAL_DOCKER_TOOL.function.name],
-      systemMessage: sessionSettings.systemMessage as SessionConfig['systemMessage'],
       responseRequirements,
-      onSessionId: (id) => {
-        sessionId = id;
-        onSessionId?.(id);
+      onSession: (s) => {
+        sessionId = s.sessionId;
+        onSessionId?.(s.sessionId);
       },
     });
-    
+
     result = turnResult.result;
     
     try {
