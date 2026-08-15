@@ -323,6 +323,49 @@ export class SessionWrapper {
   }
 
   /**
+   * Adopts an already-created `CopilotSession` (e.g. from
+   * `createHardenedSession`) into a new `SessionWrapper`, so callers that
+   * must create their session through a `SessionPolicy` (audit-codebase.ts,
+   * run-issue-task.ts, gateLoop.ts's SYS-REQ-004 retry site -- see issue
+   * #359) can still use `runForcedToolTurn`/`runForcedToolTurnUntilTimeout`.
+   *
+   * This is an escape hatch, not a general-purpose constructor path: it
+   * exists only because `SessionWrapper` cannot itself express
+   * `SessionPolicy`'s `autoApprovedTools`/`onPermissionRequest` gating
+   * (that enforcement already happened at `createSession` time and is
+   * baked into `session`). `toolsConfig`/`baseConfig` must describe the
+   * SAME tool set the session was actually created with -- they are only
+   * used for this wrapper's own bookkeeping (`_allToolNames`,
+   * `enableTools`/`disableTools` restriction between nudge retries) and
+   * for resend-on-resume (`_createConfig()`), not to re-derive permissions.
+   *
+   * `frozenSystemMessage` must be the exact `systemMessage` value sent at
+   * the session's original creation -- `resumeSession` does not inherit it
+   * (issue #208), so this is what every subsequent nudge/stall retry
+   * re-sends. Passing anything else silently drops the original prompt on
+   * the first retry.
+   */
+  static adopt(
+    session: CopilotSession,
+    client: CopilotClient,
+    toolsConfig: SessionWrapperToolsConfig,
+    baseConfig: SessionWrapperBaseConfig,
+    modelName: string,
+    frozenSystemMessage: SessionConfig['systemMessage'] | undefined,
+  ): SessionWrapper {
+    const wrapper = new SessionWrapper(client, toolsConfig, baseConfig);
+    wrapper._session = session;
+    wrapper._frozenSystemMessage = frozenSystemMessage;
+    wrapper._modelName = modelName;
+    // Prevents a spurious "system prompt changed" notice on the first
+    // resume: there is no prior wrapper-issued turn to have diverged from,
+    // since the adopted session's initial prompt was sent by
+    // `createHardenedSession`, not this wrapper.
+    wrapper._announcedSystemPrompt = wrapper._systemPrompt;
+    return wrapper;
+  }
+
+  /**
    * Enables one or more construction-time tools (SYS-REQ-028c). Mutates only
    * the private enabled subset -- the wire-level `tools`/`availableTools`
    * sent to the SDK never change (SYS-REQ-028/028d-1). If called after a

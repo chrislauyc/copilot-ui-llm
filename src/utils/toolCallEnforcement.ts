@@ -320,7 +320,7 @@ export async function runForcedToolTurn<T>(
 
   let tracker: { readonly getText: () => string; readonly unsubscribe: () => void } | undefined;
   let unsubTool: (() => void) | undefined;
-  let unsubOnSession: (() => void) | void = undefined;
+  let unsubOnSession: (() => void) | undefined;
 
   const setupToolListener = (s: CopilotSession) => {
     return s.on((event: unknown) => {
@@ -505,7 +505,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
 
   let tracker: { readonly getText: () => string; readonly unsubscribe: () => void } | undefined;
   let unsubTool: (() => void) | undefined;
-  let unsubOnSession: (() => void) | void = undefined;
+  let unsubOnSession: (() => void) | undefined;
 
   const setupToolListener = (s: CopilotSession) => {
     return s.on((event: unknown) => {

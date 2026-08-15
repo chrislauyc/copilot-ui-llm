@@ -2422,6 +2422,18 @@ export const handleGateLoop = async (
                   `[GateLoop] SYS-REQ-004: No tool call detected on first turn. Attempting one narrowed retry before failing MutationGate.`,
                   LogLevel.WARN,
                 );
+                // Disabled pending issue #359 scope decision: `session` here is a
+                // long-lived, multi-turn session created with its own
+                // `onPermissionRequest: handleGateRunPermission` (see
+                // `loopSessionOptions` above). `runForcedToolTurnUntilTimeout` now
+                // requires a `SessionWrapper`, and `SessionWrapper.adopt()` (see its
+                // docstring) would silently replace `handleGateRunPermission` with
+                // the wrapper's own permission handler on every resumed retry turn --
+                // a real enforcement change, not a mechanical signature fix. Left
+                // commented out rather than adopted with a type escape hatch until
+                // that's explicitly resolved; the surrounding MutationGate failure
+                // path below still applies when this retry is skipped.
+                /*
                 try {
                   const retryResult = (await Promise.race([
                     runForcedToolTurnUntilTimeout(
@@ -2495,6 +2507,7 @@ export const handleGateLoop = async (
                     LogLevel.WARN,
                   );
                 }
+                */
               }
 
               if (
