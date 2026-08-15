@@ -12,7 +12,7 @@ import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SessionConfig, type SdkProviderConfig, ToolSet } from '../src/copilotSdk/boundary';
+import { CopilotClient, type SessionConfig, type SdkProviderConfig, type ToolInvocation, ToolSet } from '../src/copilotSdk/boundary';
 import { createHardenedSession, type SessionPolicy } from '../src/copilotSdk/hardenedSession';
 import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
 import { createRunGhCommandTool, RUN_GH_COMMAND_TOOL_NAME, type RunGhCommandArgs } from './tools/agentGhTool';
@@ -255,7 +255,8 @@ async function main() {
         // same trust boundary `auditGhCommandTool.handler` already relies on.
         custom: sessionConfig.tools.map((tool) => ({
           ...tool,
-          handler: (args: unknown) => tool.handler!(args as RunGhCommandArgs),
+          handler: (args: unknown, invocation: ToolInvocation) =>
+            tool.handler!(args as RunGhCommandArgs, invocation),
         })),
       },
       {},
