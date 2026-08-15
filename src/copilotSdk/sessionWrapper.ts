@@ -301,6 +301,28 @@ export class SessionWrapper {
   }
 
   /**
+   * Read-only view of the live SDK session this wrapper is currently
+   * holding, or `undefined` before the first `sendAndWait()` call
+   * (SYS-REQ-028f: construction never creates a session by itself).
+   *
+   * This is read-only exposure of a session the wrapper already created
+   * itself -- not a way to inject config onto a session it didn't create --
+   * so it does not reopen the #327 "no side door" guarantee. Callers that
+   * need to attach event listeners (tool-call tracking, stall silence
+   * tracking, etc.) should do so via the `onSessionReady` callback on
+   * `sendAndWait()` rather than reading this getter after the fact: a
+   * resume replaces the underlying `CopilotSession` object, and by the time
+   * `sendAndWait()`'s returned promise resolves, every event for that turn
+   * has already fired. `onSessionReady` is invoked synchronously with the
+   * (possibly brand-new) session object right after it's created/resumed,
+   * before the prompt is sent, so a listener attached inside it does not
+   * miss anything.
+   */
+  get session(): CopilotSession | undefined {
+    return this._session;
+  }
+
+  /**
    * Enables one or more construction-time tools (SYS-REQ-028c). Mutates only
    * the private enabled subset -- the wire-level `tools`/`availableTools`
    * sent to the SDK never change (SYS-REQ-028/028d-1). If called after a
@@ -459,7 +481,18 @@ export class SessionWrapper {
    * outgoing turn, including the first -- not only turns following a
    * mutation.
    */
-  async sendAndWait(prompt: string | MessageOptions, timeout?: number): Promise<AssistantMessageEvent | undefined> {
+  async sendAndWait(
+    prompt: string | MessageOptions,
+    timeout?: number,
+    /**
+     * Invoked synchronously with the live session right after it's
+     * created/resumed for this call, before the prompt is sent -- see the
+     * `session` getter's doc comment for why this exists instead of relying
+     * on that getter alone. Optional: most callers don't need per-turn
+     * listeners and can just await the result.
+     */
+    onSessionReady?: (session: CopilotSession) => void
+  ): Promise<AssistantMessageEvent | undefined> {
     if (!this._client) {
       throw new Error('SessionWrapper.sendAndWait: no CopilotClient was supplied to this instance.');
     }
@@ -497,6 +530,7 @@ export class SessionWrapper {
       const config = this._createConfig();
       this._frozenSystemMessage = config.systemMessage;
       this._session = await this._client.createSession({ ...this._baseConfig, ...config });
+      onSessionReady?.(this._session);
     } else {
       // Resuming: `onPermissionRequest` is the only field this spec requires
       // (SYS-REQ-028g) to differ in *purpose* across resume, but SYS-REQ-028g
@@ -542,6 +576,7 @@ export class SessionWrapper {
         availableTools: resumeConfig.availableTools,
         systemMessage: this._frozenSystemMessage,
       });
+      onSessionReady?.(this._session);
     }
 
     this._announcedSystemPrompt = this._systemPrompt;
