@@ -153,6 +153,11 @@ async function main() {
     console.log('[run-issue-task] sending task and waiting for completion...');
     // See SessionWrapper.adopt's docstring (issue #359): `session` above was
     // already hardened by `policy` at createHardenedSession time.
+    // TODO(#78): audit nit -- see the matching TODO in
+    // scripts/audit-codebase.ts. This `toolsConfig` also omits `builtins`,
+    // so built-in tool calls are rejected here too during forced tool
+    // turns, an undocumented tightening vs. the old auto-approved-all
+    // behavior. Needs a decision before assuming it's correct.
     const wrapper = SessionWrapper.adopt(
       session,
       client,

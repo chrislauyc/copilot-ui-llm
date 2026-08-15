@@ -242,6 +242,15 @@ async function main() {
     // docstring, issue #359) rather than letting runForcedToolTurnUntilTimeout
     // create its own -- this session's permissions were already fixed by
     // `policy` at createHardenedSession time.
+    // TODO(#78): audit nit -- this `toolsConfig` declares only `custom`
+    // tools, omitting `builtins`, so the wrapper's `_onPermissionRequest`
+    // rejects built-in tool calls (bash/view/edit/grep/glob) during forced
+    // tool turns here. The previous `createHardenedSession` +
+    // `autoApprovedTools` path auto-approved all tools, so this is an
+    // undocumented behavioral tightening -- differs from
+    // `auditorHelper.ts`'s wrapper, which explicitly lists builtins per
+    // issue #77. May be correct (the model should only call the target
+    // tool on a forced turn) but needs a decision before assuming so.
     const wrapper = SessionWrapper.adopt(
       session,
       client,

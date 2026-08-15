@@ -2438,6 +2438,19 @@ export const handleGateLoop = async (
                 // subsequent turns keep going through `handleGateRunPermission`
                 // as before.
                 try {
+                  // TODO(#78): SYS-REQ-028g violation flagged by audit. `session`
+                  // was created via `client.createSession(loopSessionOptions)`,
+                  // and `loopSessionOptions` has no `systemMessage` field, so the
+                  // SDK's own default system message was used at creation time.
+                  // Passing `undefined` here makes `_createConfig()` fall back to
+                  // `buildCustomizeSystemMessage(undefined)` -> `{ mode:
+                  // 'customize', content: '' }` on resume, which is NOT
+                  // byte-identical to that SDK default, as SYS-REQ-028g requires.
+                  // Not fixing now per owner direction (spec modifications are
+                  // forbidden without sign-off) -- needs a scope decision on
+                  // whether `_createConfig()`/`adopt()` should gain a path that
+                  // omits `systemMessage` entirely when creation didn't send one,
+                  // or whether SYS-REQ-028g/h need an explicit carve-out first.
                   const retryWrapper = SessionWrapper.adopt(
                     session,
                     client,
