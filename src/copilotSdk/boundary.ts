@@ -29,6 +29,7 @@ export type {
   Tool,
   ToolExecutionCompleteContent,
   ToolExecutionCompleteEvent,
+  ToolInvocation,
 } from '@github/copilot-sdk';
 
 /**

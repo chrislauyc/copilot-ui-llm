@@ -11,12 +11,14 @@ import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SessionConfig, type SdkProviderConfig, ToolSet } from '../src/copilotSdk/boundary';
+import { CopilotClient, type SessionConfig, type SdkProviderConfig, type ToolInvocation, ToolSet } from '../src/copilotSdk/boundary';
 import { createHardenedSession, type SessionPolicy } from '../src/copilotSdk/hardenedSession';
+import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
 import {
   createRunGhCommandTool,
   ALLOWED_GH_COMMANDS,
   RUN_GH_COMMAND_TOOL_NAME,
+  type RunGhCommandArgs,
 } from './tools/agentGhTool';
 
 // SDK-nuance tracking (issue #221): unlike `executeAuditSession` (auditorHelper.ts),
@@ -149,13 +151,36 @@ async function main() {
     setActiveOpenRouterSessionId(sessionId);
 
     console.log('[run-issue-task] sending task and waiting for completion...');
-    await runForcedToolTurnUntilTimeout(session, executionConfig, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
+    // See SessionWrapper.adopt's docstring (issue #359): `session` above was
+    // already hardened by `policy` at createHardenedSession time.
+    // TODO(#78): audit nit -- see the matching TODO in
+    // scripts/audit-codebase.ts. This `toolsConfig` also omits `builtins`,
+    // so built-in tool calls are rejected here too during forced tool
+    // turns, an undocumented tightening vs. the old auto-approved-all
+    // behavior. Needs a decision before assuming it's correct.
+    const wrapper = SessionWrapper.adopt(
+      session,
       client,
+      {
+        // See the matching comment in scripts/audit-codebase.ts: adapt at
+        // this boundary rather than widening SessionWrapperToolsConfig's
+        // type. `args` is already validated against the tool's JSON schema
+        // by the SDK before the handler runs -- same trust boundary
+        // `runGhCommandTool.handler` itself relies on.
+        custom: sessionConfig.tools.map((tool) => ({
+          ...tool,
+          handler: (args: unknown, invocation: ToolInvocation) =>
+            tool.handler!(args as RunGhCommandArgs, invocation),
+        })),
+      },
+      {},
+      executionConfig.model,
+      sessionConfig.systemMessage as SessionConfig['systemMessage'],
+    );
+    await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
       timeoutMs: 900000,
       maxRetries: 2,
       getResult: () => undefined,
-      tools: sessionConfig.tools,
-      systemMessage: sessionConfig.systemMessage as SessionConfig['systemMessage'],
       onSessionId: (id) => {
         sessionId = id;
         setActiveOpenRouterSessionId(id);

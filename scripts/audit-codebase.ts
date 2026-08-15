@@ -12,9 +12,10 @@ import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SessionConfig, type SdkProviderConfig, ToolSet } from '../src/copilotSdk/boundary';
+import { CopilotClient, type SessionConfig, type SdkProviderConfig, type ToolInvocation, ToolSet } from '../src/copilotSdk/boundary';
 import { createHardenedSession, type SessionPolicy } from '../src/copilotSdk/hardenedSession';
-import { createRunGhCommandTool, RUN_GH_COMMAND_TOOL_NAME } from './tools/agentGhTool';
+import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
+import { createRunGhCommandTool, RUN_GH_COMMAND_TOOL_NAME, type RunGhCommandArgs } from './tools/agentGhTool';
 
 // Narrower scope than run-issue-task.ts (see AGENTS.md / issue #273): that
 // script *resolves* an existing issue via a gh-only tool with no filesystem
@@ -237,13 +238,44 @@ async function main() {
     setActiveOpenRouterSessionId(sessionId);
 
     console.log('[audit-codebase] sending task and waiting for completion...');
-    await runForcedToolTurnUntilTimeout(session, executionConfig, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
+    // Adopts the already-hardened `session` above (see SessionWrapper.adopt's
+    // docstring, issue #359) rather than letting runForcedToolTurnUntilTimeout
+    // create its own -- this session's permissions were already fixed by
+    // `policy` at createHardenedSession time.
+    // TODO(#78): audit nit -- this `toolsConfig` declares only `custom`
+    // tools, omitting `builtins`, so the wrapper's `_onPermissionRequest`
+    // rejects built-in tool calls (bash/view/edit/grep/glob) during forced
+    // tool turns here. The previous `createHardenedSession` +
+    // `autoApprovedTools` path auto-approved all tools, so this is an
+    // undocumented behavioral tightening -- differs from
+    // `auditorHelper.ts`'s wrapper, which explicitly lists builtins per
+    // issue #77. May be correct (the model should only call the target
+    // tool on a forced turn) but needs a decision before assuming so.
+    const wrapper = SessionWrapper.adopt(
+      session,
       client,
+      {
+        // `Tool<RunGhCommandArgs>` isn't structurally assignable to
+        // `SessionWrapperToolsConfig.custom`'s `Tool<unknown>` (contravariant
+        // handler param) -- adapt at this boundary rather than widening the
+        // wrapper's own type. `args` here is exactly what `auditGhCommandTool`
+        // itself already treats as pre-validated against its JSON schema
+        // (the SDK validates before invoking the handler), so this is the
+        // same trust boundary `auditGhCommandTool.handler` already relies on.
+        custom: sessionConfig.tools.map((tool) => ({
+          ...tool,
+          handler: (args: unknown, invocation: ToolInvocation) =>
+            tool.handler!(args as RunGhCommandArgs, invocation),
+        })),
+      },
+      {},
+      executionConfig.model,
+      sessionConfig.systemMessage as SessionConfig['systemMessage'],
+    );
+    await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
       timeoutMs: 900000,
       maxRetries: 2,
       getResult: () => undefined,
-      tools: sessionConfig.tools,
-      systemMessage: sessionConfig.systemMessage as SessionConfig['systemMessage'],
       availableTools,
       onSessionId: (id) => {
         sessionId = id;

@@ -44,6 +44,7 @@ import {
   AMBIGUITY_CHECK_TOOL,
 } from "../config/tools";
 import { runForcedToolTurnUntilTimeout } from "../utils/toolCallEnforcement";
+import { SessionWrapper } from "../copilotSdk/sessionWrapper";
 import {
   normalizeGates,
   TASK_TYPE_GATE_MAP,
@@ -1144,28 +1145,35 @@ export const handleGateLoop = async (
           const clarityConfig = registryInstance.getExecutionConfig(
             DEFAULT_ROLES_CONFIG.planner.model,
           );
-          // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
-          const claritySession: CopilotSession = await client.createSession({
-            model: clarityConfig.model,
-            provider: clarityConfig.provider as SdkProviderConfig,
-            onPermissionRequest: async () => ({ kind: "approve-once" }),
-            tools: [
-              defineTool(
-                AMBIGUITY_CHECK_TOOL.function.name,
-                AMBIGUITY_CHECK_TOOL.function.description,
-                AMBIGUITY_CHECK_TOOL.function.parameters,
-                async () => {
-                  return { status: "success" };
-                },
-              ),
-            ],
-          });
+          // Constructs a SessionWrapper up front instead of calling
+          // client.createSession() directly (issue #346) -- the wrapper owns
+          // this session's entire lifecycle, so it now routes through the
+          // sanctioned wrapper same as everything else, and the
+          // eslint-disable for issue #246 item 7 no longer applies.
+          const clarityWrapper = new SessionWrapper(
+            client,
+            {
+              custom: [
+                defineTool(
+                  AMBIGUITY_CHECK_TOOL.function.name,
+                  AMBIGUITY_CHECK_TOOL.function.description,
+                  AMBIGUITY_CHECK_TOOL.function.parameters,
+                  async () => {
+                    return { status: "success" };
+                  },
+                ),
+              ],
+            },
+            { provider: clarityConfig.provider as SdkProviderConfig },
+          ).setModelName(clarityConfig.model);
 
           let clarityData: ClarityCheckData | null = null;
-          // NOTE: attached via onSession below (not just on `claritySession`), because
-          // runForcedToolTurnUntilTimeout's nudge retry calls client.resumeSession() internally,
-          // which returns a brand-new CopilotSession object. A listener bound only to
-          // the original `claritySession` would silently miss the tool call if the
+          // NOTE: attached via onSession below (not just on the session
+          // active when this listener is defined), because
+          // runForcedToolTurnUntilTimeout's nudge retry calls
+          // wrapper.sendAndWait() internally, which may resume into a
+          // brand-new CopilotSession object. A listener bound only to the
+          // original session would silently miss the tool call if the
           // model only complies on the retry.
           const attachClarityListener = (s: CopilotSession) => {
             return s.on("tool.execution_start", (event) => {
@@ -1195,9 +1203,8 @@ export const handleGateLoop = async (
           };
 
           writeLog(`[Ambiguity] Sending request to ambiguity checker...`);
-          let currentClaritySession = claritySession;
           const clarityAbortHandler = () => {
-            currentClaritySession.disconnect().catch(() => {});
+            clarityWrapper.session?.disconnect().catch(() => {});
           };
           abortController.signal.addEventListener("abort", clarityAbortHandler);
           let clarityRunResult:
@@ -1205,29 +1212,13 @@ export const handleGateLoop = async (
             | undefined;
           try {
             const runPromise = runForcedToolTurnUntilTimeout(
-              claritySession,
-              clarityConfig,
+              clarityWrapper,
               "submit_clarity_check",
               formatClarityCheckPrompt(promptStr),
               {
-                client,
                 timeoutMs: 20000,
                 getResult: () => clarityData,
-                tools: [
-                  defineTool(
-                    AMBIGUITY_CHECK_TOOL.function.name,
-                    AMBIGUITY_CHECK_TOOL.function.description,
-                    AMBIGUITY_CHECK_TOOL.function.parameters,
-                    async () => {
-                      return { status: "success" };
-                    },
-                  ),
-                ],
-                onSession: (s) => {
-                  currentClaritySession = s;
-                  const unsub = attachClarityListener(s);
-                  return unsub;
-                },
+                onSession: (s) => attachClarityListener(s),
               },
             );
             clarityRunResult = (await Promise.race([
@@ -1247,8 +1238,8 @@ export const handleGateLoop = async (
           // Fire-and-forget: nothing downstream needs to wait on cleanup completing,
           // and awaiting it here adds real (occasionally spiky) latency to the
           // request path for no benefit.
-          (clarityRunResult?.session ?? currentClaritySession)
-            .disconnect()
+          (clarityRunResult?.session ?? clarityWrapper.session)
+            ?.disconnect()
             .catch(() => {});
 
           const finalClarityData = clarityData as ClarityCheckData | null;
@@ -1303,13 +1294,15 @@ export const handleGateLoop = async (
           const classificationConfig = registryInstance.getExecutionConfig(
             DEFAULT_ROLES_CONFIG.planner.model,
           );
-          const classificationSession: CopilotSession =
-            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
-            await client.createSession({
-              model: classificationConfig.model,
-              provider: classificationConfig.provider as SdkProviderConfig,
-              onPermissionRequest: async () => ({ kind: "approve-once" }),
-              tools: [
+          // Constructs a SessionWrapper up front instead of calling
+          // client.createSession() directly (issue #346) -- see the ambiguity
+          // checker above for the same migration; the eslint-disable for
+          // issue #246 item 7 no longer applies once this routes through the
+          // sanctioned wrapper.
+          const classificationWrapper = new SessionWrapper(
+            client,
+            {
+              custom: [
                 defineTool(
                   COMPOSER_ROUTER_TOOL.function.name,
                   COMPOSER_ROUTER_TOOL.function.description,
@@ -1319,13 +1312,17 @@ export const handleGateLoop = async (
                   },
                 ),
               ],
-            });
+            },
+            { provider: classificationConfig.provider as SdkProviderConfig },
+          ).setModelName(classificationConfig.model);
           let toolArguments: ComposerRouteArguments | null = null;
-          // NOTE: attached via onSession below (not just on `classificationSession`),
-          // because runForcedToolTurnUntilTimeout's nudge retry calls client.resumeSession()
-          // internally, which returns a brand-new CopilotSession object. A listener
-          // bound only to the original `classificationSession` would silently miss
-          // the tool call if the model only complies on the retry.
+          // NOTE: attached via onSession below (not just on the session
+          // active when this listener is defined), because
+          // runForcedToolTurnUntilTimeout's nudge retry calls
+          // wrapper.sendAndWait() internally, which may resume into a
+          // brand-new CopilotSession object. A listener bound only to the
+          // original session would silently miss the tool call if the model
+          // only complies on the retry.
           const attachClassificationListener = (s: CopilotSession) => {
             return s.on("tool.execution_start", (event) => {
               if (
@@ -1351,9 +1348,8 @@ export const handleGateLoop = async (
 
           const classificationPrompt = `Analyze the following user prompt for a code generation task and initialize the workspace blueprint: "${promptStr}"`;
 
-          let currentClassificationSession = classificationSession;
           const classificationAbortHandler = () => {
-            currentClassificationSession.disconnect().catch(() => {});
+            classificationWrapper.session?.disconnect().catch(() => {});
           };
           abortController.signal.addEventListener(
             "abort",
@@ -1362,29 +1358,13 @@ export const handleGateLoop = async (
           try {
             // Force the tool choice to guarantee a structured plan
             const runPromise = runForcedToolTurnUntilTimeout(
-              classificationSession,
-              classificationConfig,
+              classificationWrapper,
               "initialize_blueprint",
               classificationPrompt,
               {
-                client,
                 timeoutMs: 30000,
                 getResult: () => toolArguments,
-                tools: [
-                  defineTool(
-                    COMPOSER_ROUTER_TOOL.function.name,
-                    COMPOSER_ROUTER_TOOL.function.description,
-                    COMPOSER_ROUTER_TOOL.function.parameters,
-                    async () => {
-                      return { status: "success" };
-                    },
-                  ),
-                ],
-                onSession: (s) => {
-                  currentClassificationSession = s;
-                  const unsub = attachClassificationListener(s);
-                  return unsub;
-                },
+                onSession: (s) => attachClassificationListener(s),
               },
             );
             await Promise.race([runPromise, abortPromise]);
@@ -1444,7 +1424,7 @@ export const handleGateLoop = async (
             );
           }
           // Fire-and-forget: same reasoning as the clarity-check disconnect above.
-          currentClassificationSession.disconnect().catch(() => {});
+          classificationWrapper.session?.disconnect().catch(() => {});
         } catch (err) {
           writeLog(
             `[Composer] Classification failed, falling back: ${err}`,
@@ -2442,11 +2422,46 @@ export const handleGateLoop = async (
                   `[GateLoop] SYS-REQ-004: No tool call detected on first turn. Attempting one narrowed retry before failing MutationGate.`,
                   LogLevel.WARN,
                 );
+                // `session` here is a long-lived, multi-turn session created
+                // with its own `onPermissionRequest: handleGateRunPermission`
+                // (see `loopSessionOptions` above). `SessionWrapper.adopt()`
+                // (see its docstring) always installs the wrapper's own
+                // enabled-tool-based `onPermissionRequest` on every resumed
+                // retry turn instead of `handleGateRunPermission` -- but for
+                // THIS one narrowed retry turn that's exactly what we want:
+                // the wrapper is constructed with only the same
+                // `loopSessionOptions.tools` the original session already
+                // exposed, all enabled, so the wrapper approves precisely the
+                // same tool surface `handleGateRunPermission` would have
+                // approved for a forced tool call here. Scoped to this single
+                // adopted turn only -- `session` is repointed back below, so
+                // subsequent turns keep going through `handleGateRunPermission`
+                // as before.
                 try {
+                  // TODO(#78): SYS-REQ-028g violation flagged by audit. `session`
+                  // was created via `client.createSession(loopSessionOptions)`,
+                  // and `loopSessionOptions` has no `systemMessage` field, so the
+                  // SDK's own default system message was used at creation time.
+                  // Passing `undefined` here makes `_createConfig()` fall back to
+                  // `buildCustomizeSystemMessage(undefined)` -> `{ mode:
+                  // 'customize', content: '' }` on resume, which is NOT
+                  // byte-identical to that SDK default, as SYS-REQ-028g requires.
+                  // Not fixing now per owner direction (spec modifications are
+                  // forbidden without sign-off) -- needs a scope decision on
+                  // whether `_createConfig()`/`adopt()` should gain a path that
+                  // omits `systemMessage` entirely when creation didn't send one,
+                  // or whether SYS-REQ-028g/h need an explicit carve-out first.
+                  const retryWrapper = SessionWrapper.adopt(
+                    session,
+                    client,
+                    { custom: (loopSessionOptions.tools ?? []) as Tool[] },
+                    {},
+                    loopExecutionConfig.model,
+                    undefined,
+                  );
                   const retryResult = (await Promise.race([
                     runForcedToolTurnUntilTimeout(
-                      session,
-                      loopExecutionConfig,
+                      retryWrapper,
                       (loopSessionOptions.tools
                         ?.map(
                           (t) =>
@@ -2457,12 +2472,10 @@ export const handleGateLoop = async (
                         .filter(Boolean) as string[]) || [],
                       currentPrompt,
                       {
-                        client,
                         abortSignal: abortController.signal,
                         timeoutMs: 600000,
                         maxRetries: 1,
                         getResult: () => undefined,
-                        tools: loopSessionOptions.tools,
                       },
                     ),
                     abortPromise,

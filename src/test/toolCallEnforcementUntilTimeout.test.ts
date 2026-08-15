@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runForcedToolTurnUntilTimeout, FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from '../utils/toolCallEnforcement';
+import { SessionWrapper } from '../copilotSdk/sessionWrapper';
+
+function makeWrapper(client: unknown, toolNames: string[] = ['my_tool']): SessionWrapper {
+  return new SessionWrapper(client as any, { builtins: toolNames }, {})
+    .setModelName('test-model')
+    .setSystemPrompt('');
+}
 
 describe('runForcedToolTurnUntilTimeout', () => {
   it('no-tool-call -> retry once with availableTools narrowed and tool_choice set; exhausts retries -> throws', async () => {
@@ -16,17 +23,17 @@ describe('runForcedToolTurnUntilTimeout', () => {
     } as any;
 
     const mockClient = {
+      createSession: vi.fn().mockResolvedValue(mockSession),
       resumeSession: vi.fn().mockImplementation(async (id, opts) => {
         expect(opts.availableTools).toEqual(['my_tool']);
         return mockSession;
       }),
     } as any;
 
-    const runPromise = runForcedToolTurnUntilTimeout(mockSession, { provider: 'openrouter' }, 'my_tool', 'test prompt', {
-      client: mockClient,
+    const runPromise = runForcedToolTurnUntilTimeout(makeWrapper(mockClient), 'my_tool', 'test prompt', {
       maxRetries: 1,
       getResult: () => null,
-      tools: [],
+      provider: 'openrouter',
     });
 
     await expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool' after 1 retry/);
@@ -44,10 +51,12 @@ describe('runForcedToolTurnUntilTimeout', () => {
       sendAndWait: vi.fn().mockResolvedValue(undefined),
     } as any;
 
-    const mockClient = { resumeSession: vi.fn() } as any;
+    const mockClient = {
+      createSession: vi.fn().mockResolvedValue(mockSession),
+      resumeSession: vi.fn(),
+    } as any;
 
-    const result = await runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
-      client: mockClient,
+    const result = await runForcedToolTurnUntilTimeout(makeWrapper(mockClient), 'my_tool', 'test prompt', {
       getResult: () => ({ ok: true }),
     });
 
@@ -66,13 +75,20 @@ describe('runForcedToolTurnUntilTimeout', () => {
       sendAndWait: vi.fn().mockResolvedValue(undefined),
     } as any;
 
-    await runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
-      client: { resumeSession: vi.fn() } as any,
+    const mockClient = {
+      createSession: vi.fn().mockResolvedValue(mockSession),
+      resumeSession: vi.fn(),
+    } as any;
+
+    await runForcedToolTurnUntilTimeout(makeWrapper(mockClient), 'my_tool', 'test prompt', {
       timeoutMs: 42,
       getResult: () => null,
     });
 
-    expect(mockSession.sendAndWait).toHaveBeenCalledWith({ prompt: 'test prompt' }, 42);
+    expect(mockSession.sendAndWait).toHaveBeenCalledTimes(1);
+    const [promptOpts, timeout] = mockSession.sendAndWait.mock.calls[0];
+    expect(promptOpts.prompt).toContain('test prompt');
+    expect(timeout).toBe(42);
   });
 
   it('defaults timeoutMs to FORCED_TOOL_TURN_HARD_TIMEOUT_MS (60 min) when unset', async () => {
@@ -85,69 +101,72 @@ describe('runForcedToolTurnUntilTimeout', () => {
       sendAndWait: vi.fn().mockResolvedValue(undefined),
     } as any;
 
-    await runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
-      client: { resumeSession: vi.fn() } as any,
+    const mockClient = {
+      createSession: vi.fn().mockResolvedValue(mockSession),
+      resumeSession: vi.fn(),
+    } as any;
+
+    await runForcedToolTurnUntilTimeout(makeWrapper(mockClient), 'my_tool', 'test prompt', {
       getResult: () => null,
     });
 
     expect(FORCED_TOOL_TURN_HARD_TIMEOUT_MS).toBe(60 * 60 * 1000);
-    expect(mockSession.sendAndWait).toHaveBeenCalledWith({ prompt: 'test prompt' }, FORCED_TOOL_TURN_HARD_TIMEOUT_MS);
+    expect(mockSession.sendAndWait).toHaveBeenCalledTimes(1);
+    const [promptOpts, timeout] = mockSession.sendAndWait.mock.calls[0];
+    expect(promptOpts.prompt).toContain('test prompt');
+    expect(timeout).toBe(FORCED_TOOL_TURN_HARD_TIMEOUT_MS);
   });
 
   it('carries a caller-provided systemMessage through the nudge-retry resumeSession call (issue #208 regression)', async () => {
-    let callCount = 0;
     const mockSession = {
       sessionId: 'test-session',
       on: vi.fn().mockReturnValue(vi.fn()),
-      sendAndWait: vi.fn().mockImplementation(async () => {
-        callCount++;
-      }),
+      sendAndWait: vi.fn().mockImplementation(async () => {}),
     } as any;
 
-    const curatedSystemMessage = { mode: 'replace' as const, content: 'curated auditor prompt' };
     const mockClient = {
+      createSession: vi.fn().mockResolvedValue(mockSession),
       resumeSession: vi.fn().mockImplementation(async (_id, opts) => {
-        expect(opts.systemMessage).toEqual(curatedSystemMessage);
+        expect(opts.systemMessage).toEqual({ mode: 'customize', content: 'curated auditor prompt' });
         return mockSession;
       }),
     } as any;
 
-    const runPromise = runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
-      client: mockClient,
+    const wrapper = makeWrapper(mockClient).setSystemPrompt('curated auditor prompt');
+
+    const runPromise = runForcedToolTurnUntilTimeout(wrapper, 'my_tool', 'test prompt', {
       maxRetries: 1,
       getResult: () => null,
-      tools: [],
-      systemMessage: curatedSystemMessage,
     });
 
     await expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
     expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves an explicit availableTools set (not narrowed to targetTools) across a nudge-retry resume (issue #299 regression)', async () => {
-    let callCount = 0;
+  it('preserves the full construction-time tool set (not narrowed to targetTools) as availableTools across a nudge-retry resume (issue #299 regression)', async () => {
     const mockSession = {
       sessionId: 'test-session',
       on: vi.fn().mockReturnValue(vi.fn()),
-      sendAndWait: vi.fn().mockImplementation(async () => {
-        callCount++;
-      }),
+      sendAndWait: vi.fn().mockImplementation(async () => {}),
     } as any;
 
     const mockClient = {
+      createSession: vi.fn().mockResolvedValue(mockSession),
       resumeSession: vi.fn().mockImplementation(async (_id, opts) => {
         expect(opts.availableTools).toEqual(['my_tool', 'run_terminal_docker']);
         return mockSession;
       }),
     } as any;
 
-    const runPromise = runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
-      client: mockClient,
-      maxRetries: 1,
-      getResult: () => null,
-      tools: [],
-      availableTools: ['my_tool', 'run_terminal_docker'],
-    });
+    const runPromise = runForcedToolTurnUntilTimeout(
+      makeWrapper(mockClient, ['my_tool', 'run_terminal_docker']),
+      'my_tool',
+      'test prompt',
+      {
+        maxRetries: 1,
+        getResult: () => null,
+      },
+    );
 
     await expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
     expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
@@ -160,10 +179,13 @@ describe('runForcedToolTurnUntilTimeout', () => {
       on: vi.fn().mockReturnValue(vi.fn()),
       sendAndWait: vi.fn().mockImplementation(() => new Promise(() => {})), // never resolves
     } as any;
-    const mockClient = { resumeSession: vi.fn() } as any;
 
-    const runPromise = runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
-      client: mockClient,
+    const mockClient = {
+      createSession: vi.fn().mockResolvedValue(mockSession),
+      resumeSession: vi.fn(),
+    } as any;
+
+    const runPromise = runForcedToolTurnUntilTimeout(makeWrapper(mockClient), 'my_tool', 'test prompt', {
       abortSignal: abortController.signal,
       getResult: () => null,
     });
