@@ -302,6 +302,14 @@ function restrictToTargetTools(wrapper: SessionWrapper, turnAvailableTools: read
   wrapper.enableTools(...targetTools);
 }
 
+/**
+ * Zero production callers as of #362 (all migrated to
+ * `runForcedToolTurnUntilTimeout`) -- intentionally retained, not dead code
+ * to prune. See AGENTS.md "Stall-watchdog recovery retired in favor of a
+ * single hard timeout": this is the stall-recovery path to reach for again
+ * if a genuine dead-upstream-connection stall is ever observed independently
+ * of turn duration. Do not delete as part of unrelated cleanup.
+ */
 export async function runForcedToolTurn<T>(
   wrapper: SessionWrapper,
   toolName: string | string[],
