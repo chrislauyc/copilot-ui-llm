@@ -466,12 +466,17 @@ describe('SessionWrapper: misc lifecycle errors', () => {
   });
 });
 
-describe('SessionWrapper.adopt (issue #358: caller-owned existing session)', () => {
+// NOTE: adopt() is a transitional mechanism (issue #358), not a permanent
+// spec-sanctioned feature -- see the docstring on SessionWrapper.adopt().
+// These tests lock down its behavior while it's in use, not because it's
+// meant to be a lasting pattern; they should be revisited/retired alongside
+// adopt() once the raw-session call sites it unblocks are migrated.
+describe('SessionWrapper.adopt (issue #358: transitional caller-owned-session path)', () => {
   function frozenSystemMessage(content: string): SessionConfig['systemMessage'] {
     return { mode: 'customize', content };
   }
 
-  it('the first sendAndWait after adopt resumes the adopted session, never creates a new one (SYS-REQ-028f carve-out)', async () => {
+  it('the first sendAndWait after adopt resumes the adopted session, never creates a new one (adopt() is exempt from SYS-REQ-028f\'s create-on-first-call default, per its docstring -- not a spec amendment)', async () => {
     const { client, createCalls, resumeCalls, sessions: _sessions } = fakeClient();
     const preexistingSession = {
       sessionId: 'preexisting-session',
@@ -494,7 +499,7 @@ describe('SessionWrapper.adopt (issue #358: caller-owned existing session)', () 
     expect(resumeCalls[0]?.sessionId).toBe('preexisting-session');
   });
 
-  it('resends the exact frozenSystemMessage passed to adopt(), byte-identical, on every subsequent resume (SYS-REQ-028g/h/028f-carve-out)', async () => {
+  it('resends the exact frozenSystemMessage passed to adopt(), byte-identical, on every subsequent resume (per SYS-REQ-028g/h, applied to adopt()\'s caller-supplied value rather than a wrapper-issued one)', async () => {
     const { client, resumeCalls } = fakeClient();
     const preexistingSession = {
       sessionId: 'preexisting-session',
