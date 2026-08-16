@@ -372,6 +372,18 @@ export class SessionWrapper {
    * caveat into a `shall`-worded spec would misrepresent an unenforced
    * caller obligation as a guarantee the class provides; it belongs in the
    * spec only once/if `adopt()` gains a way to verify or enforce it.
+   *
+   * TRANSITIONAL, NOT A SANCTIONED PATTERN (issue #358): `adopt()` exists
+   * solely to unblock the SYS-REQ-004 migration for the one remaining
+   * raw-session call site in `gateLoop.ts` (and the other
+   * `SessionPolicy`-based callers named above) while they still construct
+   * their session outside `SessionWrapper`. It is not an endorsed
+   * general-purpose way to hand a caller-owned session to a wrapper going
+   * forward. Once those call sites are migrated so `SessionWrapper` (or
+   * `SessionPolicy`) owns session creation end-to-end, `adopt()` should be
+   * revisited for removal/deprecation. New call sites should not reach for
+   * `adopt()` as an integration shortcut; prefer constructing a
+   * `SessionWrapper` normally.
    */
   static adopt(
     session: CopilotSession,
