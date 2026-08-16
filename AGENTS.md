@@ -153,3 +153,33 @@ currently only wired up inside `sendAndWaitWithAbort`'s dormant watchdog, but wa
 pulled out on its own so the pattern doesn't have to be rediscovered if it's ever
 needed by a new call site -- reach for it directly rather than re-deriving the
 `tool.execution_start`/`tool.execution_complete` bookkeeping from scratch.
+
+
+## Spec as Ground Truth
+
+Agents **SHALL** implement spec items exactly as written. Where an implementation diverges from a spec item, agents **SHALL** modify the implementation to match the spec — never the reverse.
+
+Silence in the spec is not license to relax it. If a spec item does not address a given case, agents **SHALL** treat that as underspecified and escalate for clarification (see below) rather than inferring permissive behavior from the implementation's current behavior.
+
+Agents **SHALL NOT** edit spec documents to make them match the implementation, and **SHALL NOT** leave comments in the codebase that rationalize or normalize a deviation from a spec item (e.g. explaining why code "intentionally" diverges from spec). Any such deviation is a defect to be fixed, not documented as acceptable.
+
+### Handling suspected spec errors
+
+Specs can contain genuine errors — typos, stale values, internal contradictions. Agents are not required to treat every spec item as infallible, but they **SHALL NOT** unilaterally resolve suspected errors by editing the spec or by quietly implementing something other than what the spec says.
+
+If an agent believes a spec item is genuinely erroneous (as opposed to merely inconvenient or harder to implement), it **SHALL**:
+1. Implement the spec exactly as written, even if believed to be wrong.
+2. Flag the suspected error explicitly to a human reviewer, citing the specific spec item and the reason it appears incorrect.
+3. Wait for human confirmation before any spec change is made. Agents **SHALL NOT** make that change themselves.
+
+### Auditor agents
+
+Auditor agents **SHALL NEVER** propose changing the spec to match the implementation. Findings **SHALL** be phrased as implementation violations, not spec deficiencies — e.g. "Implementation violates spec item 4.2" rather than "Spec item 4.2 may need updating to match current behavior." Suspected genuine spec errors follow the escalation path above, not an auditor-initiated spec edit.
+
+
+
+### Spec changes require an independent PR
+
+Any change to a spec document **SHALL** be made in its own pull request containing only spec changes — no source code, no test changes, and no implementation changes bundled in the same PR or commit range. This applies regardless of whether the change originated from an agent's escalation or a human's own initiative.
+
+Agents **SHALL NOT** open a spec-change PR on their own initiative. A spec PR may only be opened after a human has reviewed and confirmed a flagged spec error per the escalation process above.
