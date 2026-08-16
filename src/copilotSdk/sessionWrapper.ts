@@ -354,16 +354,24 @@ export class SessionWrapper {
    * re-sends. Passing anything else silently drops the original prompt on
    * the first retry.
    *
-   * TODO(#78): audit flags SYS-REQ-028f tension: the spec states
-   * constructing a new `SessionWrapper` shall always result in
-   * `client.createSession(...)`, never a resume, with resuming only
-   * happening by reusing the wrapper instance that did the creating. This
-   * `adopt()` escape hatch builds a *new* wrapper around a session it did
-   * not create, so its first `sendAndWait()` always takes the resume path.
-   * Not resolving now per owner direction (spec modifications are
-   * forbidden without sign-off) -- needs a decision on whether
-   * SYS-REQ-028f should be amended to document this escape hatch as an
-   * explicit carve-out, or whether an alternative should replace it.
+   * Resolved (issue #358): the SYS-REQ-028f tension this TODO originally
+   * flagged doesn't require a spec amendment to resolve, because `adopt()`
+   * is a static factory that always returns a brand-new wrapper with
+   * `_session` already set -- never an instance method invoked on a
+   * wrapper that may already hold one. "Construction-or-adoption exactly
+   * once, never both, never twice" therefore holds structurally, without
+   * needing a runtime guard/throw or a formal carve-out to 028f's text.
+   *
+   * This is deliberately kept as a code-level design note rather than a
+   * new EARS requirement in docs/SessionWrapper-spec.md: the harder part
+   * of what `adopt()` does -- resending a `systemMessage`/tool config that
+   * actually matches what the adopted session was created with -- is a
+   * caller obligation `SessionWrapper` cannot verify against the session
+   * object itself (see the `gateLoop.ts` call site's own TODO(#78) for a
+   * live case where that obligation isn't currently met). Writing that
+   * caveat into a `shall`-worded spec would misrepresent an unenforced
+   * caller obligation as a guarantee the class provides; it belongs in the
+   * spec only once/if `adopt()` gains a way to verify or enforce it.
    */
   static adopt(
     session: CopilotSession,
