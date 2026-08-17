@@ -1,4 +1,10 @@
-import { CopilotSession, MessageOptions } from '../copilotSdk/boundary';
+import {
+  CopilotSession,
+  MessageOptions,
+  SessionEventHandler,
+  SessionEventType,
+  TypedSessionEventHandler,
+} from '../copilotSdk/boundary';
 import { SessionWrapper } from '../copilotSdk/sessionWrapper';
 
 /**
@@ -113,14 +119,29 @@ export function createExecutionAwareSilenceTracker() {
  *
  * Takes a `SessionWrapper` rather than a raw `CopilotSession` (issue #346):
  * the wrapper decides create-vs-resume internally, so the stall tracker's
- * listener is attached via `SessionWrapper.sendAndWait`'s `onSessionReady`
- * callback -- invoked synchronously right after the (possibly brand-new, on
- * resume) underlying session is created, before the prompt is sent --
- * rather than being attached to a session object the caller already has in
- * hand. `onSessionReady`, if supplied, is called with that same session so
- * callers needing their own per-session listeners (tool-call tracking, in
- * `runForcedToolTurn` below) don't need a second, separately-timed
- * attachment point.
+ * listener is passed in as one of `SessionWrapper.sendAndWait`'s `listeners`
+ * -- subscribed internally by the wrapper right after the (possibly
+ * brand-new, on resume) underlying session is created, before the prompt is
+ * sent, and unsubscribed by the wrapper itself once that call settles.
+ * `onSessionReady`, if supplied, still fires once the wrapper's own session
+ * exists, so callers needing their own per-session setup (tool-call
+ * tracking, in `runForcedToolTurn` below) have a hook -- but note it no
+ * longer receives the raw `CopilotSession` (SYS-REQ-028j): it fires with no
+ * arguments, purely as a timing signal, and any listeners a caller needs
+ * must go through `additionalListeners` below instead of reading a session
+ * reference inside this callback.
+ *
+ * NOTE on cleanup timing: because the wrapper only unsubscribes once its
+ * *own* internal `session.sendAndWait()` settles, a stall-triggered rejection
+ * here (the watchdog racer winning `Promise.race` below) does not itself
+ * force earlier unsubscription -- the stall listener stays attached (still
+ * harmlessly recording events, not leaking, just not silenced) until the
+ * abandoned turn's underlying SDK call eventually settles on its own. The
+ * previous implementation unsubscribed immediately on any race outcome;
+ * this is a minor behavior change traded for removing all listener-lifetime
+ * bookkeeping from this function, matching #346's simplified sendAndWait
+ * contract (nothing persists past one call, no manual reattachment/cleanup
+ * needed by callers).
  *
  * `timeoutMs` is intentionally NOT passed straight through to the SDK's own
  * sendAndWait deadline -- see SDK_HARD_TIMEOUT_CEILING_MS.
@@ -132,49 +153,49 @@ export async function sendAndWaitWithAbort(
   prompt: MessageOptions,
   timeoutMs: number,
   abortSignal?: AbortSignal,
-  onSessionReady?: (session: CopilotSession) => void,
+  onSessionReady?: () => void,
+  additionalListeners?: Array<
+    | { type: SessionEventType; handler: TypedSessionEventHandler<SessionEventType> }
+    | { handler: SessionEventHandler }
+  >,
 ): Promise<void> {
   let usageTelemetryLogCount = 0;
   const silenceTracker = createExecutionAwareSilenceTracker();
-  let unsubscribeStallTracker: (() => void) | undefined;
 
-  const attach = (session: CopilotSession): void => {
-    unsubscribeStallTracker = session.on((event: unknown) => {
-      silenceTracker.recordEvent(event);
-      if (!event || typeof event !== 'object' || !('type' in event)) return;
-      const ev = event as Record<string, unknown>;
+  const stallListener: SessionEventHandler = (event: unknown) => {
+    silenceTracker.recordEvent(event);
+    if (!event || typeof event !== 'object' || !('type' in event)) return;
+    const ev = event as Record<string, unknown>;
 
-      if (ev.type === 'tool.execution_start') {
-        const data = ev.data as Record<string, unknown> | undefined;
-        const toolName = data?.toolName;
-        if (typeof toolName === 'string' && toolName.length > 0) {
-          console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
-        } else {
-          console.error(
-            `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: 'tool.execution_start' event is missing a valid ` +
-            `string 'toolName' in its data (got: ${JSON.stringify(data)}). This violates an assumption about ` +
-            `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
-          );
-        }
+    if (ev.type === 'tool.execution_start') {
+      const data = ev.data as Record<string, unknown> | undefined;
+      const toolName = data?.toolName;
+      if (typeof toolName === 'string' && toolName.length > 0) {
+        console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+      } else {
+        console.error(
+          `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: 'tool.execution_start' event is missing a valid ` +
+          `string 'toolName' in its data (got: ${JSON.stringify(data)}). This violates an assumption about ` +
+          `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
+        );
       }
+    }
 
-      if (
-        (ev.type === 'assistant.usage' || ev.type === 'session.usage_info') &&
-        usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
-      ) {
-        usageTelemetryLogCount++;
-        if (ev.data && typeof ev.data === 'object') {
-          console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
-        } else {
-          console.error(
-            `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: '${ev.type}' event has no usable 'data' object ` +
-            `(got: ${JSON.stringify(ev.data)}). This violates an assumption about the SDK's event contract -- ` +
-            `investigate before trusting this event's downstream handling.`,
-          );
-        }
+    if (
+      (ev.type === 'assistant.usage' || ev.type === 'session.usage_info') &&
+      usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
+    ) {
+      usageTelemetryLogCount++;
+      if (ev.data && typeof ev.data === 'object') {
+        console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
+      } else {
+        console.error(
+          `[sendAndWaitWithAbort] UNEXPECTED EVENT SHAPE: '${ev.type}' event has no usable 'data' object ` +
+          `(got: ${JSON.stringify(ev.data)}). This violates an assumption about the SDK's event contract -- ` +
+          `investigate before trusting this event's downstream handling.`,
+        );
       }
-    });
-    onSessionReady?.(session);
+    }
   };
 
   let stallTimer: ReturnType<typeof setInterval> | null = null;
@@ -201,7 +222,7 @@ export async function sendAndWaitWithAbort(
       .sendAndWait(
         prompt,
         timeoutMs > STALL_TIMEOUT_MS ? Math.max(timeoutMs, SDK_HARD_TIMEOUT_CEILING_MS) : timeoutMs,
-        attach,
+        [{ handler: stallListener }, ...(additionalListeners ?? [])],
       )
       .then(() => undefined),
     stallPromise,
@@ -220,7 +241,9 @@ export async function sendAndWaitWithAbort(
     await Promise.race(racers);
   } finally {
     if (stallTimer) clearInterval(stallTimer);
-    unsubscribeStallTracker?.();
+    // No manual unsubscribe here anymore -- SessionWrapper.sendAndWait's own
+    // `finally` unsubscribes `stallListener` once its internal call settles
+    // (see the NOTE on cleanup timing above).
   }
 }
 

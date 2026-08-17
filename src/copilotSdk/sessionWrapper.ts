@@ -6,7 +6,10 @@ import {
   PermissionRequest,
   PermissionRequestResult,
   SessionConfig,
+  SessionEventHandler,
+  SessionEventType,
   Tool,
+  TypedSessionEventHandler,
 } from './boundary';
 
 /** Config fields callers must NOT supply themselves -- always derived by `_createConfig()`. */
@@ -307,26 +310,27 @@ export class SessionWrapper {
    *
    * This is read-only exposure of a session the wrapper already created
    * itself -- not a way to inject config onto a session it didn't create --
-   * so it does not reopen the #327 "no side door" guarantee. Callers that
-   * need to attach event listeners (tool-call tracking, stall silence
-   * tracking, etc.) should do so via the `onSessionReady` callback on
-   * `sendAndWait()` rather than reading this getter after the fact: a
-   * resume replaces the underlying `CopilotSession` object, and by the time
-   * `sendAndWait()`'s returned promise resolves, every event for that turn
-   * has already fired. `onSessionReady` is invoked synchronously with the
-   * (possibly brand-new) session object right after it's created/resumed,
-   * before the prompt is sent, so a listener attached inside it does not
-   * miss anything.
+   * so it does not reopen the #327 "no side door" guarantee. As of #346,
+   * this getter is no longer needed for event-listener attachment (tool-call
+   * tracking, stall tracking, etc.) -- use the `listeners` parameter on
+   * `sendAndWait()` instead, which subscribes/unsubscribes internally and
+   * never hands the caller a `CopilotSession` reference. The getter remains
+   * exposed only for the small number of callers that need lifecycle control
+   * (`.disconnect()`) rather than event observation -- see the TODO below,
+   * which is now narrower than before but still open.
    */
   // TODO(#78): audit flags SYS-REQ-028j tension: the spec text says any
   // module other than SessionWrapper reading/writing the CopilotSession
-  // directly is a violation, with no read-only carve-out. This getter (and
-  // `onSessionReady` below) exposes the live session to gateLoop.ts and
-  // toolCallEnforcement.ts. Not resolving now per owner direction (spec
-  // modifications are forbidden without sign-off) -- needs a decision on
-  // whether SYS-REQ-028j should be amended to carve out read-only access /
-  // `onSessionReady`-based listener attachment, or whether this surface
-  // should be restricted instead.
+  // directly is a violation, with no read-only carve-out. As of #346, event-
+  // listener attachment no longer needs this getter (see `sendAndWait`'s
+  // `listeners` parameter, which subscribes internally). What remains is
+  // narrower: a few callers (gateLoop.ts, toolCallEnforcement.ts) still read
+  // this getter specifically to call `.disconnect()` on abort. Not resolving
+  // now per owner direction (spec modifications are forbidden without
+  // sign-off) -- needs a decision on whether SYS-REQ-028j should be amended
+  // to carve out this narrower disconnect-only case, or whether `disconnect`
+  // should become a `SessionWrapper`-owned method instead (mirroring how
+  // `listeners` internalized the event-observation case).
   get session(): CopilotSession | undefined {
     return this._session;
   }
@@ -548,13 +552,27 @@ export class SessionWrapper {
     prompt: string | MessageOptions,
     timeout?: number,
     /**
-     * Invoked synchronously with the live session right after it's
-     * created/resumed for this call, before the prompt is sent -- see the
-     * `session` getter's doc comment for why this exists instead of relying
-     * on that getter alone. Optional: most callers don't need per-turn
-     * listeners and can just await the result.
+     * Event listeners scoped to this single call only. Subscribed to the
+     * live session right after it's created/resumed for this call, before
+     * the prompt is sent (so nothing fired during the turn is missed --
+     * see the `session` getter's doc comment), and unconditionally
+     * unsubscribed before this method returns or throws. Nothing persists
+     * across calls: pass the same listeners again on the next
+     * `sendAndWait()` if they're still needed (e.g. every turn of a loop),
+     * including across a resume that produces a brand-new `CopilotSession`
+     * object -- there is no reattachment to reason about, since each call
+     * subscribes fresh. Accepts either a type-filtered entry (`{ type,
+     * handler }`, mirrors `CopilotSession.on(type, handler)`) or an
+     * all-events entry (`{ handler }`, mirrors `CopilotSession.on(handler)`)
+     * for callers that need to observe every event regardless of type. This
+     * is `SessionWrapper`'s only sanctioned path for observing session
+     * events (SYS-REQ-028j): the caller never receives a `CopilotSession`
+     * reference to call `.on()` on directly.
      */
-    onSessionReady?: (session: CopilotSession) => void
+    listeners?: Array<
+      | { type: SessionEventType; handler: TypedSessionEventHandler<SessionEventType> }
+      | { handler: SessionEventHandler }
+    >
   ): Promise<AssistantMessageEvent | undefined> {
     if (!this._client) {
       throw new Error('SessionWrapper.sendAndWait: no CopilotClient was supplied to this instance.');
@@ -593,7 +611,6 @@ export class SessionWrapper {
       const config = this._createConfig();
       this._frozenSystemMessage = config.systemMessage;
       this._session = await this._client.createSession({ ...this._baseConfig, ...config });
-      onSessionReady?.(this._session);
     } else {
       // Resuming: `onPermissionRequest` is the only field this spec requires
       // (SYS-REQ-028g) to differ in *purpose* across resume, but SYS-REQ-028g
@@ -639,16 +656,22 @@ export class SessionWrapper {
         availableTools: resumeConfig.availableTools,
         systemMessage: this._frozenSystemMessage,
       });
-      onSessionReady?.(this._session);
     }
 
     this._announcedSystemPrompt = this._systemPrompt;
 
-    // TS can't resolve `session.sendAndWait`'s overloads against a `string |
-    // MessageOptions` union directly (call site, not signature, must narrow) --
-    // this branch exists only for that; both arms call the same thing.
-    return typeof effectivePrompt === 'string'
-      ? this._session.sendAndWait(effectivePrompt, timeout)
-      : this._session.sendAndWait(effectivePrompt, timeout);
+    const unsubscribers = (listeners ?? []).map((l) =>
+      'type' in l ? this._session!.on(l.type, l.handler) : this._session!.on(l.handler)
+    );
+    try {
+      // TS can't resolve `session.sendAndWait`'s overloads against a `string |
+      // MessageOptions` union directly (call site, not signature, must narrow) --
+      // this branch exists only for that; both arms call the same thing.
+      return await (typeof effectivePrompt === 'string'
+        ? this._session.sendAndWait(effectivePrompt, timeout)
+        : this._session.sendAndWait(effectivePrompt, timeout));
+    } finally {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    }
   }
 }
