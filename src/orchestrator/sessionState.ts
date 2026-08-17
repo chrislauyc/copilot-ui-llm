@@ -70,6 +70,43 @@ export class SessionMap extends Map<string, SessionRecord> {
 export const activeSessions = new SessionMap();
 export const sseResToSessionId = new Map<express.Response, string>();
 export const sessionWritePromises = new Map<string, Promise<void>>();
+
+/**
+ * Shared active-orchestration-session gate for tools whose handler code we
+ * own (`run_terminal_docker`, `run_tests`) -- moved from the permission
+ * layer (`handleGateRunPermission` in gateLoop.ts) into the tool handlers
+ * themselves as part of the #346 migration off `SessionWrapper.adopt()`.
+ * `SessionWrapper`'s own `onPermissionRequest` only expresses static
+ * name-based enablement (SYS-REQ-028d); it has no hook for this kind of
+ * live-state check, so rather than extending SessionWrapper's permission
+ * surface (a spec change), the check moves to where we already own the
+ * code path and can simply decline to do the side-effecting work.
+ *
+ * `autoApproveAll` is passed in rather than imported directly, since the
+ * source of truth (`globalAutoApproveAll` in gateLoop.ts) would otherwise
+ * create a circular import (gateLoop.ts already imports the tool handlers
+ * this function is used by). Preserves handleGateRunPermission's exact
+ * prior scope: checks for ANY active, non-awaiting-human session across
+ * `activeSessions`, not just the calling session -- not narrowed here.
+ */
+export function checkActiveOrchestrationSession(
+  autoApproveAll: boolean,
+  toolName: string
+): { ok: true } | { ok: false; message: string } {
+  if (autoApproveAll) {
+    return { ok: true };
+  }
+  const hasActiveSession = Array.from(activeSessions.values()).some(
+    s => s.stateSnapshot?.isRunning && !s.stateSnapshot?.awaitingHuman
+  );
+  if (hasActiveSession) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    message: `Execution of ${toolName} requires an active, authorized orchestration session context.`,
+  };
+}
 export const activeLocks = new Map<string, AbortController>();
 
 export let sensitiveValuesCache: Set<string> | null = null;
