@@ -5,7 +5,7 @@ import {
   SessionEventType,
   TypedSessionEventHandler,
 } from '../copilotSdk/boundary';
-import { SessionWrapper } from '../copilotSdk/sessionWrapper';
+import { SessionWrapper, SessionListenerEntry } from '../copilotSdk/sessionWrapper';
 
 /**
  * How much of the model's last assistant message to include when we give up
@@ -123,13 +123,11 @@ export function createExecutionAwareSilenceTracker() {
  * -- subscribed internally by the wrapper right after the (possibly
  * brand-new, on resume) underlying session is created, before the prompt is
  * sent, and unsubscribed by the wrapper itself once that call settles.
- * `onSessionReady`, if supplied, still fires once the wrapper's own session
- * exists, so callers needing their own per-session setup (tool-call
- * tracking, in `runForcedToolTurn` below) have a hook -- but note it no
- * longer receives the raw `CopilotSession` (SYS-REQ-028j): it fires with no
- * arguments, purely as a timing signal, and any listeners a caller needs
- * must go through `additionalListeners` below instead of reading a session
- * reference inside this callback.
+ * `onSessionId`, if supplied, fires the same way (SYS-REQ-028j: id only,
+ * never the raw `CopilotSession`) -- callers needing their own per-session
+ * setup (tool-call tracking, in `runForcedToolTurn` below) do so by passing
+ * their own entries in `additionalListeners` instead of reading a session
+ * reference inside a callback.
  *
  * NOTE on cleanup timing: because the wrapper only unsubscribes once its
  * *own* internal `session.sendAndWait()` settles, a stall-triggered rejection
@@ -153,11 +151,8 @@ export async function sendAndWaitWithAbort(
   prompt: MessageOptions,
   timeoutMs: number,
   abortSignal?: AbortSignal,
-  onSessionReady?: () => void,
-  additionalListeners?: Array<
-    | { type: SessionEventType; handler: TypedSessionEventHandler<SessionEventType> }
-    | { handler: SessionEventHandler }
-  >,
+  onSessionId?: (sessionId: string) => void,
+  additionalListeners?: SessionListenerEntry[],
 ): Promise<void> {
   let usageTelemetryLogCount = 0;
   const silenceTracker = createExecutionAwareSilenceTracker();
@@ -223,6 +218,7 @@ export async function sendAndWaitWithAbort(
         prompt,
         timeoutMs > STALL_TIMEOUT_MS ? Math.max(timeoutMs, SDK_HARD_TIMEOUT_CEILING_MS) : timeoutMs,
         [{ handler: stallListener }, ...(additionalListeners ?? [])],
+        onSessionId,
       )
       .then(() => undefined),
     stallPromise,
@@ -266,14 +262,13 @@ export interface ForcedToolTurnOptions<T> {
   availableTools?: string[];
   responseRequirements?: { toolCallExample?: string };
   /**
-   * Called with every underlying session this turn runs on -- the initial
-   * session, and each new session object the wrapper produces internally on
-   * a nudge or stall retry (`SessionWrapper.sendAndWait`'s `onSessionReady`
-   * callback returns a *different* CopilotSession object each time it
-   * creates/resumes). Return an unsubscribe function so it can be cleaned
-   * up before the next retry.
+   * Caller-supplied event listeners, re-subscribed on every underlying send
+   * this turn runs (the initial send, and each nudge or stall retry) --
+   * mirrors `SessionWrapper.sendAndWait`'s own `listeners` parameter, since
+   * that's where these are ultimately forwarded. Never hands back a raw
+   * `CopilotSession` (SYS-REQ-028j): callers observe events, not sessions.
    */
-  onSession?: (session: CopilotSession) => (() => void) | void;
+  listeners?: SessionListenerEntry[];
   /**
    * How many times to retry after an upstream stall before giving up.
    * Tracked separately from `maxRetries`. Default 2.
@@ -341,29 +336,29 @@ export async function runForcedToolTurn<T>(
   const targetTools = Array.isArray(toolName) ? toolName : [toolName];
   const turnAvailableTools = opts.availableTools ?? targetTools;
 
-  let tracker: { readonly getText: () => string; readonly unsubscribe: () => void } | undefined;
-  let unsubTool: (() => void) | undefined;
-  let unsubOnSession: (() => void) | undefined;
-
-  const setupToolListener = (s: CopilotSession) => {
-    return s.on((event: unknown) => {
-      const ev = event as Record<string, unknown>;
-      if (eventMatchesTargetTool(ev, targetTools)) {
-        toolCalled = true;
-      }
-    });
+  // Reset per attempt (see sendWithStallRetry below) rather than rebuilt
+  // per session: these are plain event handlers, forwarded as
+  // `additionalListeners` and subscribed/unsubscribed internally by
+  // `SessionWrapper.sendAndWait` on every call, so there is nothing here
+  // left to attach to or unsubscribe from a session directly (SYS-REQ-028j).
+  let assistantText = '';
+  const textListener = (event: unknown): void => {
+    if (!event || typeof event !== 'object') return;
+    const ev = event as Record<string, unknown>;
+    const evData = ev.data as Record<string, unknown> | undefined;
+    if (ev.type === 'assistant.message') {
+      assistantText += (evData?.content as string | undefined) || '';
+    } else if (ev.type === 'assistant.message_delta') {
+      assistantText += (evData?.delta as string | undefined) || (evData?.content as string | undefined) || '';
+    }
   };
-
-  const handleSessionReady = (session: CopilotSession): void => {
-    unsubOnSession?.();
-    tracker?.unsubscribe();
-    unsubTool?.();
-    tracker = trackLastAssistantMessage(session);
-    toolCalled = false;
-    unsubTool = setupToolListener(session);
-    unsubOnSession = opts.onSession?.(session) ?? undefined;
-    opts.onSessionId?.(session.sessionId);
+  const toolListener = (event: unknown): void => {
+    const ev = event as Record<string, unknown>;
+    if (eventMatchesTargetTool(ev, targetTools)) {
+      toolCalled = true;
+    }
   };
+  const callerListeners = opts.listeners ?? [];
 
   const sendWithStallRetry = async (
     promptOpts: { prompt: string; tool_choice?: unknown },
@@ -372,8 +367,17 @@ export async function runForcedToolTurn<T>(
     let currentPromptOpts = promptOpts;
     let resumeAttempted = false;
     while (true) {
+      toolCalled = false;
+      assistantText = '';
       try {
-        await sendAndWaitWithAbort(currentWrapper, currentPromptOpts as MessageOptions, timeoutMs, opts.abortSignal, handleSessionReady);
+        await sendAndWaitWithAbort(
+          currentWrapper,
+          currentPromptOpts as MessageOptions,
+          timeoutMs,
+          opts.abortSignal,
+          opts.onSessionId,
+          [{ handler: toolListener }, { handler: textListener }, ...callerListeners],
+        );
         return;
       } catch (err) {
         if (!isStallError(err)) {
@@ -423,7 +427,7 @@ export async function runForcedToolTurn<T>(
 
   await sendWithStallRetry({ prompt: initialPrompt });
 
-  let lastAssistantText = tracker?.getText() ?? '';
+  let lastAssistantText = assistantText;
 
   let attempt = 0;
 
@@ -451,10 +455,8 @@ export async function runForcedToolTurn<T>(
 
     await sendWithStallRetry(promptOpts);
 
-    lastAssistantText = tracker?.getText() || lastAssistantText;
+    lastAssistantText = assistantText || lastAssistantText;
   }
-
-  unsubOnSession?.();
 
   if (!toolCalled) {
     const toolNamesStr = targetTools.map(t => `'${t}'`).join(' or ');
@@ -526,12 +528,24 @@ export async function runForcedToolTurnUntilTimeout<T>(
   const turnAvailableTools = opts.availableTools ?? targetTools;
   let usageTelemetryLogCount = 0;
 
-  let tracker: { readonly getText: () => string; readonly unsubscribe: () => void } | undefined;
-  let unsubTool: (() => void) | undefined;
-  let unsubOnSession: (() => void) | undefined;
+  // Reset per attempt (see sendUntilTimeout below), not per session: plain
+  // event handlers forwarded as `listeners`, subscribed/unsubscribed
+  // internally by `SessionWrapper.sendAndWait` on every call (SYS-REQ-028j
+  // -- no session reference held here).
+  let assistantText = '';
+  const textListener = (event: unknown): void => {
+    if (!event || typeof event !== 'object') return;
+    const ev = event as Record<string, unknown>;
+    const evData = ev.data as Record<string, unknown> | undefined;
+    if (ev.type === 'assistant.message') {
+      assistantText += (evData?.content as string | undefined) || '';
+    } else if (ev.type === 'assistant.message_delta') {
+      assistantText += (evData?.delta as string | undefined) || (evData?.content as string | undefined) || '';
+    }
+  };
+  const callerListeners = opts.listeners ?? [];
 
-  const setupToolListener = (s: CopilotSession) => {
-    return s.on((event: unknown) => {
+  const toolListener = (event: unknown): void => {
       const ev = event as Record<string, unknown>;
 
       if (ev.type === 'tool.execution_start') {
@@ -567,23 +581,20 @@ export async function runForcedToolTurnUntilTimeout<T>(
       if (eventMatchesTargetTool(ev, targetTools)) {
         toolCalled = true;
       }
-    });
-  };
-
-  const handleSessionReady = (session: CopilotSession): void => {
-    unsubOnSession?.();
-    tracker?.unsubscribe();
-    unsubTool?.();
-    tracker = trackLastAssistantMessage(session);
-    toolCalled = false;
-    unsubTool = setupToolListener(session);
-    unsubOnSession = opts.onSession?.(session) ?? undefined;
-    opts.onSessionId?.(session.sessionId);
   };
 
   const sendUntilTimeout = async (promptOpts: MessageOptions): Promise<void> => {
+    toolCalled = false;
+    assistantText = '';
     const racers: Promise<void>[] = [
-      wrapper.sendAndWait(promptOpts, timeoutMs, handleSessionReady).then(() => undefined),
+      wrapper
+        .sendAndWait(
+          promptOpts,
+          timeoutMs,
+          [{ handler: toolListener }, { handler: textListener }, ...callerListeners],
+          opts.onSessionId,
+        )
+        .then(() => undefined),
     ];
     if (opts.abortSignal) {
       racers.push(
@@ -599,7 +610,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
 
   await sendUntilTimeout({ prompt: initialPrompt } as MessageOptions);
 
-  let lastAssistantText = tracker?.getText() ?? '';
+  let lastAssistantText = assistantText;
 
   let attempt = 0;
 
@@ -627,10 +638,8 @@ export async function runForcedToolTurnUntilTimeout<T>(
 
     await sendUntilTimeout(promptOpts as MessageOptions);
 
-    lastAssistantText = tracker?.getText() || lastAssistantText;
+    lastAssistantText = assistantText || lastAssistantText;
   }
-
-  unsubOnSession?.();
 
   if (!toolCalled) {
     const toolNamesStr = targetTools.map(t => `'${t}'`).join(' or ');

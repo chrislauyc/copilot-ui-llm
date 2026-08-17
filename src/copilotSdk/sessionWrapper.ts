@@ -30,6 +30,22 @@ type ConfigOwnedKeys =
 export type SessionWrapperBaseConfig = Omit<SessionConfig, ConfigOwnedKeys>;
 
 /**
+ * One entry of `sendAndWait`'s `listeners` array: either a type-filtered
+ * entry (`{ type, handler }`, mirrors `CopilotSession.on(type, handler)`,
+ * with `handler` narrowed to that specific event's payload) or an
+ * all-events entry (`{ handler }`, mirrors `CopilotSession.on(handler)`).
+ * Declared as a distributed mapped type over `SessionEventType` rather than
+ * `{ type: SessionEventType; handler: TypedSessionEventHandler<SessionEventType> }`
+ * directly -- the latter doesn't distribute (`T` in
+ * `TypedSessionEventHandler<T>` is instantiated once with the whole union),
+ * so a caller's `{ type: 'tool.execution_start', handler: aNarrowlyTypedHandler }`
+ * would fail to typecheck against it even though it's exactly the intended usage.
+ */
+export type SessionListenerEntry =
+  | { [K in SessionEventType]: { type: K; handler: TypedSessionEventHandler<K> } }[SessionEventType]
+  | { handler: SessionEventHandler };
+
+/**
  * The full, fixed tool set for a session's lifetime (SYS-REQ-028/028a). This
  * is the ONLY place a tool schema can be declared -- there is no
  * post-construction method that adds a tool absent here. `builtins` are
@@ -569,10 +585,19 @@ export class SessionWrapper {
      * events (SYS-REQ-028j): the caller never receives a `CopilotSession`
      * reference to call `.on()` on directly.
      */
-    listeners?: Array<
-      | { type: SessionEventType; handler: TypedSessionEventHandler<SessionEventType> }
-      | { handler: SessionEventHandler }
-    >
+    listeners?: SessionListenerEntry[],
+    /**
+     * Fired synchronously with just the id of the session this call just
+     * created or resumed -- before the prompt is sent, same timing as
+     * `listeners` above. Exists because some callers (e.g. correlating an
+     * outbound request with a global, or a stall-recovery loop that needs
+     * to know a session existed even if the call that used it never
+     * resolves) need to know a session came into being independent of
+     * whether this call ever settles. Unlike `listeners`, this never hands
+     * back anything beyond the id string -- also SYS-REQ-028j-compliant,
+     * just narrower than the general event-observation case.
+     */
+    onSessionId?: (sessionId: string) => void
   ): Promise<AssistantMessageEvent | undefined> {
     if (!this._client) {
       throw new Error('SessionWrapper.sendAndWait: no CopilotClient was supplied to this instance.');
@@ -660,8 +685,18 @@ export class SessionWrapper {
 
     this._announcedSystemPrompt = this._systemPrompt;
 
+    onSessionId?.(this._session.sessionId);
+
     const unsubscribers = (listeners ?? []).map((l) =>
-      'type' in l ? this._session!.on(l.type, l.handler) : this._session!.on(l.handler)
+      // TS can't correlate `l.type` and `l.handler` back to the same `K`
+      // here: `SessionListenerEntry`'s distribution happens per array
+      // *entry* (so each entry's `type`/`handler` genuinely do match at
+      // the call site that constructed it), but once entries are merged
+      // into one array and iterated, `l` widens back to the whole union
+      // and this correlation is lost from TS's perspective, not from
+      // reality's. Safe by construction: every entry is still exactly the
+      // `{ type, handler }` pair its caller wrote.
+      'type' in l ? this._session!.on(l.type, l.handler as TypedSessionEventHandler<typeof l.type>) : this._session!.on(l.handler)
     );
     try {
       // TS can't resolve `session.sendAndWait`'s overloads against a `string |
