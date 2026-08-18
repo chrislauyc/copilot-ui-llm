@@ -225,7 +225,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         return {
           sessionId: `session-${sessionCount}`,
           on: vi.fn().mockImplementation((handler: (event: unknown) => void) => {
-            eventHandlersBySession[idx].push(handler);
+            eventHandlersBySession[idx]!.push(handler);
             return vi.fn();
           }),
           sendAndWait: vi.fn().mockImplementation(() => new Promise(() => {})),
@@ -255,7 +255,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       // session-1's still-attached (never-unsubscribed, since its mock
       // sendAndWait never settles) listeners -- simulating the abandoned
       // attempt's SDK call finally producing an event after the fact.
-      eventHandlersBySession[0].forEach((h) =>
+      eventHandlersBySession[0]!.forEach((h) =>
         h({ type: 'tool.execution_start', data: { toolName: 'my_tool' } }),
       );
 
