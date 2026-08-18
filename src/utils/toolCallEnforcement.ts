@@ -2,8 +2,6 @@ import {
   CopilotSession,
   MessageOptions,
   SessionEventHandler,
-  SessionEventType,
-  TypedSessionEventHandler,
 } from '../copilotSdk/boundary';
 import { SessionWrapper, SessionListenerEntry } from '../copilotSdk/sessionWrapper';
 
