@@ -45,7 +45,7 @@ import {
   AMBIGUITY_CHECK_TOOL,
 } from "../config/tools";
 import { runForcedToolTurnUntilTimeout } from "../utils/toolCallEnforcement";
-import { SessionWrapper } from "../copilotSdk/sessionWrapper";
+import { SessionWrapper, SessionListenerEntry, SessionWrapperBaseConfig } from "../copilotSdk/sessionWrapper";
 import {
   normalizeGates,
   TASK_TYPE_GATE_MAP,
@@ -114,6 +114,7 @@ import {
   activeLocks,
   getGlobalClient,
   getOrCreateSession,
+  getOrCreateSessionWrapper,
   resetSessionForNewRun,
   updateStateSnapshot,
   writeLog,
@@ -620,6 +621,13 @@ export const handleGateLoop = async (
   // Now, spawn the background task asynchronously!
   const runPromise = (async () => {
     let session: CopilotSession | null = null;
+    // Owns the main loop's session per issue #346 (replaces the old raw
+    // `client.createSession`/`SessionWrapper.adopt()` pair). `session` above
+    // is kept in sync (`session = sessionWrapper.session ?? null`) after
+    // every construction/turn purely so the many pre-existing
+    // disconnect/`if (session)` cleanup call sites below don't all need to
+    // change shape -- new code should prefer `sessionWrapper` directly.
+    let sessionWrapper: SessionWrapper | null = null;
     let unsubscribe: (() => void) | null = null;
     let isRequestClosed = false;
     let heartbeatId: NodeJS.Timeout | null = null;
@@ -1828,82 +1836,103 @@ export const handleGateLoop = async (
             streaming: true,
           };
 
-          // Step 1: Session Lifecycle using unified getOrCreateSession helper FIRST to prevent telemetry loss
-          let reused = false;
+          // Step 1: Session Lifecycle -- migrated onto SessionWrapper (issue
+          // #346 / #246 item 7). `getOrCreateSessionWrapper` hands back the
+          // SAME wrapper instance across turns for an unchanged model/cwd
+          // (its next `sendAndWait()` resumes internally, SYS-REQ-028e/f --
+          // no `adopt()`), and a brand-new wrapper on model/cwd change or DB
+          // rehydration. The wrapper itself doesn't create/resume its
+          // `CopilotSession` until its first `sendAndWait()`
+          // (SYS-REQ-028f), so `session` stays whatever it was until the
+          // send/listener block below runs and re-syncs it from
+          // `sessionWrapper.session`.
+          //
+          // `handleGateRunPermission`'s two orchestrator tools
+          // (`run_terminal_docker`/`run_tests`) are both always enabled
+          // below and never disabled by this call site, so
+          // `SessionWrapper`'s plain enablement-based `onPermissionRequest`
+          // (approve iff enabled) reproduces this session's slice of
+          // `handleGateRunPermission`'s behavior exactly -- the
+          // state-aware "active orchestration session" check it used to
+          // also perform for those two tools already moved into their own
+          // tool-handler code (`checkActiveOrchestrationSession`, see
+          // `makeDockerToolHandler`/the `run_tests` handler above).
+          const loopToolsConfig = {
+            custom: (loopSessionOptions.tools ?? []) as Tool[],
+          };
+          const loopToolNames = (loopSessionOptions.tools ?? [])
+            .map((t) => t.name)
+            .filter(Boolean) as string[];
+          const loopWrapperBaseConfig: SessionWrapperBaseConfig = {
+            workingDirectory: runCwd,
+            streaming: true,
+            ...(loopExecutionConfig.provider
+              ? { provider: loopExecutionConfig.provider as SdkProviderConfig }
+              : {}),
+          };
           if (sessionId) {
-            const record = await getOrCreateSession(
+            const { wrapper } = await getOrCreateSessionWrapper(
               sessionId,
               loopExecutionConfig.model,
               runCwd,
               client,
-              loopSessionOptions,
+              loopToolsConfig,
+              loopWrapperBaseConfig,
             );
-            session = record.copilotSession;
-            reused = true;
+            sessionWrapper = wrapper;
+            sessionWrapper.enableTools(...loopToolNames);
             writeLog(
-              `[GateLoop] Retr/obtained session ${sessionId} for model ${currentModel}`,
+              `[GateLoop] Retr/obtained session wrapper ${sessionId} for model ${currentModel}`,
             );
-          }
-
-          // Clean up last iteration's session if NOT reused and NOT first turn
-          if (!reused && session) {
-            try {
-              await session.disconnect();
-            } catch (e) {
-              writeLog(
-                `[GateLoop] Error disconnecting last loop session: ${e}`,
-                LogLevel.WARN,
-              );
-            }
-            session = null;
-          }
-
-          // Create fresh session if none found/reused (e.g., if sessionId is not provided)
-          if (!session) {
-            writeLog(
-              `[GateLoop] Creating fresh session for model ${currentModel}`,
-            );
-            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to SessionWrapper (issue #246 item 7, tracked separately from item 4's enforcement)
-            session = await client.createSession(
-              loopSessionOptions as SessionConfig,
-            );
-
-            // Store new session in activeSessions for future reuse
-            if (sessionId) {
-              if (activeSessions.has(sessionId)) {
-                try {
-                  await activeSessions
-                    .get(sessionId)!
-                    .copilotSession?.disconnect();
-                } catch (e) {}
+            // If this is a genuinely fresh session record (no history yet
+            // tracked for it), seed the request-level rehydration data the
+            // old fallback branch below used to seed only for the
+            // no-sessionId/never-before-seen case. `getOrCreateSessionWrapper`
+            // already carries forward any *existing* record's history/turns,
+            // so this only matters the very first time a given sessionId is
+            // seen in this process.
+            if (!activeSessions.get(sessionId)?.conversationHistory?.length) {
+              const rehydrated = req as RehydratedRequest;
+              if (
+                rehydrated._rehydratedStateSnapshot ||
+                rehydrated._rehydratedHistory ||
+                rehydrated._rehydratedTurns
+              ) {
+                const rec = activeSessions.get(sessionId)!;
+                activeSessions.set(sessionId, {
+                  ...rec,
+                  stateSnapshot:
+                    rehydrated._rehydratedStateSnapshot || rec.stateSnapshot,
+                  conversationHistory:
+                    rehydrated._rehydratedHistory || rec.conversationHistory,
+                  turns: rehydrated._rehydratedTurns || rec.turns,
+                });
               }
-              activeSessions.set(sessionId, {
-                sessionId,
-                copilotSession: session,
-                currentModel: currentModel,
-                cwd: runCwd,
-                lastUsedAt: Date.now(),
-                totalInputTokens: 0,
-                totalOutputTokens: 0,
-                eventSequenceCounter: 0,
-                stateSnapshot: (req as RehydratedRequest)
-                  ._rehydratedStateSnapshot || {
-                  isRunning: true,
-                  retryCount: retryCount,
-                  currentTier: currentModel,
-                  activeGate: undefined,
-                  hasFailureState: consecutiveFailures > 0,
-                  awaitingHuman: false,
-                },
-                conversationHistory:
-                  (req as RehydratedRequest)._rehydratedHistory || [],
-                turns: (req as RehydratedRequest)._rehydratedTurns || [],
-                diagnosticTrail: [],
-              });
-              writeLog(
-                `[GateLoop] Cached new session ${sessionId} for future reuse.`,
-              );
             }
+          } else {
+            // No sessionId: ephemeral, not tracked in activeSessions, mirrors
+            // the pre-migration no-sessionId fallback (an uncached,
+            // per-request-only session).
+            if (sessionWrapper?.session) {
+              try {
+                await sessionWrapper.session.disconnect();
+              } catch (e) {
+                writeLog(
+                  `[GateLoop] Error disconnecting last loop session: ${e}`,
+                  LogLevel.WARN,
+                );
+              }
+            }
+            sessionWrapper = new SessionWrapper(
+              client,
+              loopToolsConfig,
+              loopWrapperBaseConfig,
+            );
+            sessionWrapper.setModelName(loopExecutionConfig.model);
+            sessionWrapper.enableTools(...loopToolNames);
+            writeLog(
+              `[GateLoop] Creating fresh (uncached) session wrapper for model ${currentModel}`,
+            );
           }
 
           writeLog(
@@ -2023,10 +2052,10 @@ export const handleGateLoop = async (
               );
               writeLog(`[GateLoop][Diagnostic] Emitted response: ${content}`);
             } else {
-              if (!session) {
+              if (!sessionWrapper) {
                 throw new Error("Failed to create or rehydrate session.");
               }
-              const activeSession: CopilotSession = session;
+              const activeSessionWrapper: SessionWrapper = sessionWrapper;
 
               // Upstream provider (e.g. OpenRouter) can occasionally issue a tool
               // call and then go silent for the remainder of the turn -- no
@@ -2059,27 +2088,34 @@ export const handleGateLoop = async (
               });
 
               let eventChain = Promise.resolve();
+              // Whether this turn's event stream should stop being acted on
+              // (closed connection / idle / error / abort already handled).
+              // Pre-#346 this was done by literally unsubscribing the raw
+              // `CopilotSession.on()` handler; `SessionWrapper.sendAndWait`'s
+              // `listeners` param now owns subscribe/unsubscribe internally
+              // (subscribing right before the send, unsubscribing once that
+              // call settles -- SYS-REQ-028j), so this handler instead just
+              // stops reacting to further events once it's already
+              // resolved/rejected `pDone`.
+              let eventHandlingDone = false;
+              let activeSendListeners: SessionListenerEntry[] = [];
               const pDone = new Promise<void>((resolve, reject) => {
                 const onAbort = () => {
-                  if (unsubscribe) {
-                    unsubscribe();
-                    unsubscribe = null;
-                  }
+                  eventHandlingDone = true;
                   reject(new Error("Operation aborted by client or timeout"));
                 };
                 abortController.signal.addEventListener("abort", onAbort);
 
-                unsubscribe = activeSession.on((event: SessionEvent) => {
+                const eventHandler = (event: SessionEvent) => {
+                  if (eventHandlingDone) {
+                    return;
+                  }
                   lastEventAt = Date.now();
                   eventChain = eventChain.then(async () => {
-                    const extEvent = event as ExtendedSessionEvent;
-                    if (sessionId && activeSessions.has(sessionId)) {
-                      const sRec = activeSessions.get(sessionId)!;
-                      activeSessions.set(sessionId, {
-                        ...sRec,
-                        unsubscribe: unsubscribe || undefined,
-                      });
+                    if (eventHandlingDone) {
+                      return;
                     }
+                    const extEvent = event as ExtendedSessionEvent;
                     try {
                       if (
                         res.writableEnded ||
@@ -2087,10 +2123,7 @@ export const handleGateLoop = async (
                         isRequestClosed ||
                         abortController.signal.aborted
                       ) {
-                        if (unsubscribe) {
-                          unsubscribe();
-                          unsubscribe = null;
-                        }
+                        eventHandlingDone = true;
                         abortController.signal.removeEventListener(
                           "abort",
                           onAbort,
@@ -2168,20 +2201,14 @@ export const handleGateLoop = async (
                         extEvent.type === "session.idle" ||
                         extEvent.type === "session.shutdown"
                       ) {
-                        if (unsubscribe) {
-                          unsubscribe();
-                          unsubscribe = null;
-                        }
+                        eventHandlingDone = true;
                         abortController.signal.removeEventListener(
                           "abort",
                           onAbort,
                         );
                         resolve();
                       } else if (extEvent.type === "session.error") {
-                        if (unsubscribe) {
-                          unsubscribe();
-                          unsubscribe = null;
-                        }
+                        eventHandlingDone = true;
                         abortController.signal.removeEventListener(
                           "abort",
                           onAbort,
@@ -2200,7 +2227,8 @@ export const handleGateLoop = async (
                       reject(err);
                     }
                   });
-                });
+                };
+                activeSendListeners = [{ handler: eventHandler }];
               });
 
               writeLog(
@@ -2230,16 +2258,22 @@ export const handleGateLoop = async (
               );
               try {
                 await Promise.race([
-                  session.sendAndWait({ prompt: currentPrompt }, 600000),
+                  activeSessionWrapper.sendAndWait(
+                    { prompt: currentPrompt },
+                    600000,
+                    activeSendListeners,
+                  ),
                   abortPromise,
                   stallPromise,
                 ]);
+                session = activeSessionWrapper.session ?? null;
                 writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
                 // Wait for session.idle / turn completion
                 writeLog(`[SESSION] Awaiting pDone resolution`);
                 await Promise.race([pDone, abortPromise, stallPromise]);
                 writeLog(`[SESSION] pDone resolved successfully`);
               } catch (pErr: unknown) {
+                session = activeSessionWrapper.session ?? session;
                 const isStall =
                   pErr instanceof Error &&
                   (pErr as Error & { isStall?: boolean }).isStall === true;
@@ -2247,10 +2281,7 @@ export const handleGateLoop = async (
                   `[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. ${isStall ? "Treating as retryable upstream stall." : "Aborting loop."}`,
                   LogLevel.WARN,
                 );
-                if (unsubscribe) {
-                  unsubscribe();
-                  unsubscribe = null;
-                }
+                eventHandlingDone = true;
 
                 // Only prolonged upstream silence is retryable here -- genuine
                 // client aborts / request closures should still terminate the
@@ -2431,46 +2462,25 @@ export const handleGateLoop = async (
                   `[GateLoop] SYS-REQ-004: No tool call detected on first turn. Attempting one narrowed retry before failing MutationGate.`,
                   LogLevel.WARN,
                 );
-                // `session` here is a long-lived, multi-turn session created
-                // with its own `onPermissionRequest: handleGateRunPermission`
-                // (see `loopSessionOptions` above). `SessionWrapper.adopt()`
-                // (see its docstring) always installs the wrapper's own
-                // enabled-tool-based `onPermissionRequest` on every resumed
-                // retry turn instead of `handleGateRunPermission` -- but for
-                // THIS one narrowed retry turn that's exactly what we want:
-                // the wrapper is constructed with only the same
-                // `loopSessionOptions.tools` the original session already
-                // exposed, all enabled, so the wrapper approves precisely the
-                // same tool surface `handleGateRunPermission` would have
-                // approved for a forced tool call here. Scoped to this single
-                // adopted turn only -- `session` is repointed back below, so
-                // subsequent turns keep going through `handleGateRunPermission`
-                // as before.
+                // `sessionWrapper` is the same long-lived, multi-turn wrapper
+                // this loop's regular turns already send through (assigned
+                // above via `getOrCreateSessionWrapper`), with the same
+                // `loopSessionOptions.tools` already enabled on it
+                // (`enableTools(...loopToolNames)` above) -- so reusing it
+                // directly here approves precisely the same tool surface
+                // `handleGateRunPermission` would have approved for a forced
+                // tool call, without needing `SessionWrapper.adopt()` (issue
+                // #346 / #246 item 7) or a second, throwaway wrapper
+                // instance. This also resolves the `frozenSystemMessage`
+                // TODO(#78) that `adopt()` had here: `sessionWrapper` already
+                // captured its own `_frozenSystemMessage` internally the
+                // first time it sent, so resuming through it here reuses
+                // that byte-identical value automatically (SYS-REQ-028g)
+                // rather than needing a caller-supplied one at all.
                 try {
-                  // TODO(#78): SYS-REQ-028g violation flagged by audit. `session`
-                  // was created via `client.createSession(loopSessionOptions)`,
-                  // and `loopSessionOptions` has no `systemMessage` field, so the
-                  // SDK's own default system message was used at creation time.
-                  // Passing `undefined` here makes `_createConfig()` fall back to
-                  // `buildCustomizeSystemMessage(undefined)` -> `{ mode:
-                  // 'customize', content: '' }` on resume, which is NOT
-                  // byte-identical to that SDK default, as SYS-REQ-028g requires.
-                  // Not fixing now per owner direction (spec modifications are
-                  // forbidden without sign-off) -- needs a scope decision on
-                  // whether `_createConfig()`/`adopt()` should gain a path that
-                  // omits `systemMessage` entirely when creation didn't send one,
-                  // or whether SYS-REQ-028g/h need an explicit carve-out first.
-                  const retryWrapper = SessionWrapper.adopt(
-                    session,
-                    client,
-                    { custom: (loopSessionOptions.tools ?? []) as Tool[] },
-                    {},
-                    loopExecutionConfig.model,
-                    undefined,
-                  );
                   const retryResult = (await Promise.race([
                     runForcedToolTurnUntilTimeout(
-                      retryWrapper,
+                      activeSessionWrapper,
                       (loopSessionOptions.tools
                         ?.map(
                           (t) =>
@@ -2498,24 +2508,13 @@ export const handleGateLoop = async (
                     | undefined;
 
                   if (retryResult) {
-                    if (retryResult.session) {
-                      session = retryResult.session;
-                      // `runForcedToolTurnUntilTimeout` may have resumed into a brand-new
-                      // CopilotSession object (client.resumeSession() returns a
-                      // different handle than the one passed in). The next loop
-                      // iteration's getOrCreateSession() reads the cached
-                      // copilotSession for this sessionId, so if we don't
-                      // repoint the cache here, the next turn silently goes to
-                      // the stale pre-retry session and loses this retry's tool
-                      // call + result -- the exact context-loss bug this fixes.
-                      if (sessionId && activeSessions.has(sessionId)) {
-                        const sRecAfterRetry = activeSessions.get(sessionId)!;
-                        activeSessions.set(sessionId, {
-                          ...sRecAfterRetry,
-                          copilotSession: retryResult.session,
-                        });
-                      }
-                    }
+                    // `activeSessionWrapper` (== `sessionWrapper`) is the
+                    // one already cached in `activeSessions` for this
+                    // `sessionId` -- unlike the old `adopt()` path, there is
+                    // no separate raw `CopilotSession` to repoint the cache
+                    // to; `session` is just re-synced from the wrapper for
+                    // the local disconnect/`if (session)` call sites below.
+                    session = retryResult.session ?? activeSessionWrapper.session ?? session;
                     if (retryResult.toolCalled) {
                       toolWasCalledInThisTurn = true;
                     }
