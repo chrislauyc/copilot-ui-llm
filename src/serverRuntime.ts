@@ -412,6 +412,36 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
       delete headers['accept-encoding'];
       headers['content-length'] = Buffer.byteLength(modifiedBody).toString();
 
+      // Opt-in diagnostic: log just the tool names this request declares to
+      // the provider, not the full body (which carries prompt/message
+      // content we don't want landing in a shared log file by default).
+      // This is the earliest point in this codebase where the outbound
+      // provider-bound `tools` array is actually visible -- everything
+      // upstream of here (SessionWrapper, CopilotClient) hands off to the
+      // spawned Copilot CLI runtime over JSON-RPC, which builds this HTTP
+      // request itself; we only get to see it once it lands back here as a
+      // proxied request. Gated behind LOG_PROVIDER_TOOLS since this fires on
+      // every provider call, not just once per session, and most callers
+      // don't want that noise in their log file.
+      if (process.env.LOG_PROVIDER_TOOLS) {
+        try {
+          const parsedForLogging = modifiedBody ? JSON.parse(modifiedBody) : undefined;
+          const toolNames = Array.isArray(parsedForLogging?.tools)
+            ? parsedForLogging.tools.map((t: { name?: string; function?: { name?: string } }) => t.function?.name ?? t.name ?? '<unnamed>')
+            : undefined;
+          if (toolNames) {
+            writeLog(
+              `[ProviderProxy] ${provider} request tools (${toolNames.length}): ${toolNames.join(', ')}` +
+                (activeOpenRouterSessionId ? ` [session_id=${activeOpenRouterSessionId}]` : ''),
+            );
+          } else {
+            writeLog(`[ProviderProxy] ${provider} request has no 'tools' field.`);
+          }
+        } catch (e) {
+          writeLog(`[ProviderProxy] LOG_PROVIDER_TOOLS: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
       const options = {
         hostname: targetHostname,
         port: 443,
