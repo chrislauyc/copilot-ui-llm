@@ -348,7 +348,28 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 let activeOpenRouterSessionId: string | undefined;
 export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
   activeOpenRouterSessionId = sessionId;
+  // A new session means a fresh turn sequence -- reset dedupe state so the
+  // next request logs instead of being skipped as a repeat of the previous
+  // session's last-seen turn. See `lastLoggedProviderToolsMessageCount`
+  // below for what this is deduping against.
+  lastLoggedProviderToolsMessageCount = undefined;
 }
+
+/**
+ * Dedupe state for the tool-list logging in the '/api/providers/:provider/*'
+ * proxy route below. A single logical "turn" (one user-visible request/
+ * response cycle) can produce several outbound provider HTTP calls with an
+ * *identical* `tools` list -- e.g. nudge retries (toolCallEnforcement.ts),
+ * or streaming reconnects -- so logging on every call would mostly be
+ * repeats of the same list. `messages.length` grows by at least one each
+ * time a new turn's request is built (the prior turn's response gets
+ * appended before the next request goes out), so using it as a dedupe key
+ * is a reasonable proxy for "new turn" without this route needing any real
+ * turn-boundary signal from the SDK, which it doesn't have. Same
+ * single-module-value caveat as `activeOpenRouterSessionId` above -- not
+ * safe for concurrent multi-session use of this server.
+ */
+let lastLoggedProviderToolsMessageCount: number | undefined;
 
   // Generic adapter registry route for model providers (SYS-REQ-004 & SYS-REQ-005)
   app.all('/api/providers/:provider/*', (req, res) => {
@@ -412,20 +433,29 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
       delete headers['accept-encoding'];
       headers['content-length'] = Buffer.byteLength(modifiedBody).toString();
 
-      // Opt-in diagnostic: log just the tool names this request declares to
-      // the provider, not the full body (which carries prompt/message
-      // content we don't want landing in a shared log file by default).
-      // This is the earliest point in this codebase where the outbound
-      // provider-bound `tools` array is actually visible -- everything
-      // upstream of here (SessionWrapper, CopilotClient) hands off to the
-      // spawned Copilot CLI runtime over JSON-RPC, which builds this HTTP
-      // request itself; we only get to see it once it lands back here as a
-      // proxied request. Gated behind LOG_PROVIDER_TOOLS since this fires on
-      // every provider call, not just once per session, and most callers
-      // don't want that noise in their log file.
-      if (process.env.LOG_PROVIDER_TOOLS) {
-        try {
-          const parsedForLogging = modifiedBody ? JSON.parse(modifiedBody) : undefined;
+      // Log just the tool names this request declares to the provider, not
+      // the full body (which carries prompt/message content we don't want
+      // landing in a shared log file). This is the earliest point in this
+      // codebase where the outbound provider-bound `tools` array is
+      // actually visible -- everything upstream of here (SessionWrapper,
+      // CopilotClient) hands off to the spawned Copilot CLI runtime over
+      // JSON-RPC, which builds this HTTP request itself; we only get to see
+      // it once it lands back here as a proxied request.
+      //
+      // Deduped to once per turn via `lastLoggedProviderToolsMessageCount`
+      // (see its declaration above) -- without this, every nudge retry or
+      // streaming reconnect within the same turn would re-log an identical
+      // tools list, since the list itself is fixed for the session's
+      // lifetime (SessionWrapper._createConfig) and can't actually change
+      // turn-to-turn either.
+      try {
+        const parsedForLogging = modifiedBody ? JSON.parse(modifiedBody) : undefined;
+        const messageCount = Array.isArray(parsedForLogging?.messages) ? parsedForLogging.messages.length : undefined;
+        const isNewTurn = messageCount === undefined || messageCount !== lastLoggedProviderToolsMessageCount;
+        if (isNewTurn) {
+          if (messageCount !== undefined) {
+            lastLoggedProviderToolsMessageCount = messageCount;
+          }
           const toolNames = Array.isArray(parsedForLogging?.tools)
             ? parsedForLogging.tools.map((t: { name?: string; function?: { name?: string } }) => t.function?.name ?? t.name ?? '<unnamed>')
             : undefined;
@@ -437,9 +467,9 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
           } else {
             writeLog(`[ProviderProxy] ${provider} request has no 'tools' field.`);
           }
-        } catch (e) {
-          writeLog(`[ProviderProxy] LOG_PROVIDER_TOOLS: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
         }
+      } catch (e) {
+        writeLog(`[ProviderProxy] tool-list logging: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
       }
 
       const options = {
