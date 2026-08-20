@@ -348,28 +348,29 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 let activeOpenRouterSessionId: string | undefined;
 export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
   activeOpenRouterSessionId = sessionId;
-  // A new session means a fresh turn sequence -- reset dedupe state so the
-  // next request logs instead of being skipped as a repeat of the previous
-  // session's last-seen turn. See `lastLoggedProviderToolsMessageCount`
-  // below for what this is deduping against.
-  lastLoggedProviderToolsMessageCount = undefined;
+  // A new session means a fresh agentic loop -- reset dedupe state so the
+  // next outbound request logs instead of being skipped as a repeat of the
+  // previous session's already-logged tools list. See
+  // `hasLoggedProviderToolsForCurrentSession` below for what this gates.
+  hasLoggedProviderToolsForCurrentSession = false;
 }
 
 /**
  * Dedupe state for the tool-list logging in the '/api/providers/:provider/*'
- * proxy route below. A single logical "turn" (one user-visible request/
- * response cycle) can produce several outbound provider HTTP calls with an
- * *identical* `tools` list -- e.g. nudge retries (toolCallEnforcement.ts),
- * or streaming reconnects -- so logging on every call would mostly be
- * repeats of the same list. `messages.length` grows by at least one each
- * time a new turn's request is built (the prior turn's response gets
- * appended before the next request goes out), so using it as a dedupe key
- * is a reasonable proxy for "new turn" without this route needing any real
- * turn-boundary signal from the SDK, which it doesn't have. Same
+ * proxy route below. A "turn" here means the whole agentic loop -- every
+ * iteration of tool calls, nudge retries (toolCallEnforcement.ts), and
+ * streaming reconnects the agent runs through before it goes idle and hands
+ * control back -- not each individual outbound LLM call within that loop.
+ * Since the `tools` list is fixed for a session's entire lifetime
+ * (SessionWrapper._createConfig never re-derives it from later
+ * enableTools/disableTools calls), it's identical on every one of those
+ * calls anyway, so logging once per *session* -- gated by this flag,
+ * flipped back to false only when a new session starts -- is what "once per
+ * turn" actually means here, not once per distinct message count. Same
  * single-module-value caveat as `activeOpenRouterSessionId` above -- not
  * safe for concurrent multi-session use of this server.
  */
-let lastLoggedProviderToolsMessageCount: number | undefined;
+let hasLoggedProviderToolsForCurrentSession = false;
 
   // Generic adapter registry route for model providers (SYS-REQ-004 & SYS-REQ-005)
   app.all('/api/providers/:provider/*', (req, res) => {
@@ -442,20 +443,13 @@ let lastLoggedProviderToolsMessageCount: number | undefined;
       // JSON-RPC, which builds this HTTP request itself; we only get to see
       // it once it lands back here as a proxied request.
       //
-      // Deduped to once per turn via `lastLoggedProviderToolsMessageCount`
-      // (see its declaration above) -- without this, every nudge retry or
-      // streaming reconnect within the same turn would re-log an identical
-      // tools list, since the list itself is fixed for the session's
-      // lifetime (SessionWrapper._createConfig) and can't actually change
-      // turn-to-turn either.
-      try {
-        const parsedForLogging = modifiedBody ? JSON.parse(modifiedBody) : undefined;
-        const messageCount = Array.isArray(parsedForLogging?.messages) ? parsedForLogging.messages.length : undefined;
-        const isNewTurn = messageCount === undefined || messageCount !== lastLoggedProviderToolsMessageCount;
-        if (isNewTurn) {
-          if (messageCount !== undefined) {
-            lastLoggedProviderToolsMessageCount = messageCount;
-          }
+      // Deduped to once per turn (the whole agentic loop, not each
+      // individual call within it) via
+      // `hasLoggedProviderToolsForCurrentSession` -- see its declaration
+      // above for why session-scoped is the right granularity here.
+      if (!hasLoggedProviderToolsForCurrentSession) {
+        try {
+          const parsedForLogging = modifiedBody ? JSON.parse(modifiedBody) : undefined;
           const toolNames = Array.isArray(parsedForLogging?.tools)
             ? parsedForLogging.tools.map((t: { name?: string; function?: { name?: string } }) => t.function?.name ?? t.name ?? '<unnamed>')
             : undefined;
@@ -464,12 +458,14 @@ let lastLoggedProviderToolsMessageCount: number | undefined;
               `[ProviderProxy] ${provider} request tools (${toolNames.length}): ${toolNames.join(', ')}` +
                 (activeOpenRouterSessionId ? ` [session_id=${activeOpenRouterSessionId}]` : ''),
             );
+            hasLoggedProviderToolsForCurrentSession = true;
           } else {
             writeLog(`[ProviderProxy] ${provider} request has no 'tools' field.`);
+            hasLoggedProviderToolsForCurrentSession = true;
           }
+        } catch (e) {
+          writeLog(`[ProviderProxy] tool-list logging: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
         }
-      } catch (e) {
-        writeLog(`[ProviderProxy] tool-list logging: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
       }
 
       const options = {
