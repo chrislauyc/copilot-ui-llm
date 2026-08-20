@@ -235,7 +235,7 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
  * the copilot SDK's own default bash/view/edit tools operating directly on
  * `CopilotClient.workingDirectory` (issue #299).
  */
-function makeAuditorExecToolHandler(abortSignal?: AbortSignal) {
+export function makeAuditorExecToolHandler(abortSignal?: AbortSignal) {
   return async (args: unknown) => {
     const record = args as Record<string, unknown>;
     const wd = (record.workingDir as string) || '';
