@@ -22,7 +22,7 @@ import { CapiProxy } from '../src/test/harness/CapiProxy';
 import { CopilotClient, defineTool } from '../src/copilotSdk/boundary';
 import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../src/config/tools';
-import { getExecCommand, getWorkspaceRoot } from '../src/workspace';
+import { getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from '../src/workspace';
 
 const MARKER = 'VERIFY_RUN_TERMINAL_DOCKER_OK';
 const SNAPSHOT_PATH = path.resolve(process.cwd(), 'src/test/snapshots/run_terminal_docker/verify_exec.yaml');
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
   await proxy.updateConfig({ filePath: SNAPSHOT_PATH, workDir: process.cwd() });
 
   const client = new CopilotClient({
-    workingDirectory: process.cwd(),
+    workingDirectory: getWorkspaceHostLocation(),
     logLevel: 'none',
     useLoggedInUser: false,
     env: {
