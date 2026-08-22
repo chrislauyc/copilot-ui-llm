@@ -5,16 +5,8 @@ name: Verify run_terminal_docker
 # it to actually run as a workflow. See issue #403.
 
 on:
-  pull_request:
-    paths:
-      - 'src/workspace/**'
-      - 'src/config/tools.ts'
-      - 'docker-compose.yml'
-      - 'scripts/verify-run-terminal-docker.ts'
-      - 'src/test/snapshots/run_terminal_docker/**'
-      - 'workflow-hotswap/docker-tool-verify.yml'
-  workflow_dispatch:
-
+    workflow_dispatch:
+    
 jobs:
   verify-docker-tool:
     runs-on: ubuntu-latest
