@@ -12,6 +12,7 @@
     "review:pr": "tsx scripts/review-pr.ts",
     "agent:issue": "tsx scripts/run-issue-task.ts",
     "agent:audit": "tsx scripts/audit-codebase.ts",
+    "agent:code-change": "tsx scripts/code-change-agent.ts",
     "import:repo": "tsx scripts/import-repo.ts",
     "diff:repo": "tsx scripts/remote-diff.ts",
     "test": "vitest run",
