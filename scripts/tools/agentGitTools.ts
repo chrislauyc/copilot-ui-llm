@@ -130,8 +130,12 @@ export function createRenameBranchTool(): Tool<RenameBranchArgs> {
  * general session environment's `GH_TOKEN` read-only (issue #407's
  * "Security / credential separation"): any ad hoc `gh`/`git` invocation the
  * agent makes from inside `run_terminal_docker` only ever sees the
- * read-only token, and the one code path capable of a real push/PR is this
- * tool alone.
+ * read-only token. Crucially, the write token is never persisted to disk
+ * either (the workflow checks out with `persist-credentials: false`), so
+ * there's nothing in `.git/config` for a direct `git push` elsewhere to
+ * find -- this tool authenticates its own push with a one-off
+ * `-c http.extraheader=...` argument, making it the only code path capable
+ * of a real push/PR.
  */
 export function createCreatePrTool(writeToken: string): Tool<CreatePrArgs> {
   if (!writeToken || !writeToken.trim()) {
@@ -173,12 +177,21 @@ export function createCreatePrTool(writeToken: string): Tool<CreatePrArgs> {
       // `run_terminal_docker`-invoked commands (and any other tool) would
       // otherwise inherit.
       const env = { ...process.env, GH_TOKEN: writeToken };
+      // The checkout step runs with persist-credentials: false specifically
+      // so nothing writes this token to .git/config, where the agent's
+      // bash builtin or run_terminal_docker's bind-mounted container could
+      // read it back out and push independently of this tool. So instead
+      // of relying on any persisted credential, the auth header is passed
+      // as a one-off `-c http.extraheader=...` argv value: it lives only in
+      // this process's argument list/environment for the duration of this
+      // single `git push`, never touching disk.
+      const authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${writeToken}`).toString('base64')}`;
       try {
-        execFileSync('git', ['push', '-u', 'origin', 'HEAD'], {
-          encoding: 'utf-8',
-          timeout: 120000,
-          env,
-        });
+        execFileSync(
+          'git',
+          ['-c', `http.extraheader=${authHeader}`, 'push', '-u', 'origin', 'HEAD'],
+          { encoding: 'utf-8', timeout: 120000, env },
+        );
         const output = execFileSync(
           'gh',
           ['pr', 'create', '--title', title, '--body', body],

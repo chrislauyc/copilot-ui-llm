@@ -17,12 +17,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Write-scoped token so the placeholder branch pushed below (and
-          # any later push from within the agent's create_pr tool) can
-          # succeed. Provisioning of CODE_CHANGE_AGENT_WRITE_TOKEN is
-          # tracked separately (issue #407's "Follow-up") -- an ops/config
-          # action rather than a code change.
+          # persist-credentials: false is load-bearing here, not
+          # incidental -- actions/checkout otherwise writes an
+          # http.extraheader with this token straight into .git/config,
+          # which would make it readable (and usable for `git push`) by
+          # the agent's bash builtin and by run_terminal_docker's
+          # bind-mounted container, defeating create_pr's status as the
+          # sole write-capable path. Auth for create_pr's own push is
+          # instead injected per-invocation from GH_WRITE_TOKEN -- see
+          # agentGitTools.ts.
           token: ${{ secrets.CODE_CHANGE_AGENT_WRITE_TOKEN }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
