@@ -68,7 +68,7 @@ You have full repo exploration and editing tools (bash, view, edit, grep, glob),
 - "${RENAME_BRANCH_TOOL_NAME}": rename the current local branch, e.g. to follow this repo's "fix/issue-<number>-<short-name>" convention. Also never pushes.
 - "${CREATE_PR_TOOL_NAME}": push your current branch and open a pull request. This is the ONLY action in this session that reaches outside your local checkout.
 
-Do not attempt to run \`git\` or \`gh\` commands directly via "${RUN_TERMINAL_DOCKER_TOOL.function.name}" or any other tool -- use the three tools above instead; direct git/gh invocations from elsewhere will not have push credentials and will fail.
+Do not attempt to run \`git\` or \`gh\` commands directly via "${RUN_TERMINAL_DOCKER_TOOL.function.name}" or any other tool -- use the three tools above instead. No push credentials are ever persisted to disk or to the shared environment, so direct git/gh push attempts from elsewhere will fail regardless.
 
 **Hard rule:** only call "${CREATE_PR_TOOL_NAME}" if you have already made and committed real changes via "${MAKE_COMMIT_TOOL_NAME}". If, after investigating, you conclude no change is warranted (task already done, not reproducible, out of scope, etc.), it is completely fine to stop and explain why in your final message instead of calling "${CREATE_PR_TOOL_NAME}" -- do not force a change just to have something to submit.`;
 }
