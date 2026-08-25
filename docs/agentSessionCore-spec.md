@@ -2,266 +2,204 @@
 
 ## Context
 
-`SessionWrapper` (issue #246, SYS-REQ-026/027/028) already enforces a strict
-boundary around SDK session creation: it is the only sanctioned caller of
-`CopilotClient.createSession`/`resumeSession`, enforced by a
-`no-restricted-syntax` lint rule. The *tooling* wired around that boundary is
-not yet under any equivalent discipline:
+`SessionWrapper` (SYS-REQ-026/027/028) is the sanctioned owner of SDK
+session lifecycle and tool enablement: schemas are frozen at construction
+(SYS-REQ-028/028a), and enablement is a private subset mutated only by
+`enableTools`/`disableTools` and enforced exclusively inside
+`SessionWrapper`'s own `onPermissionRequest` (SYS-REQ-028d, 028j -- no other
+module may read or write enablement state).
 
-- `RUN_TERMINAL_DOCKER_TOOL.function.{name,description,parameters}` is
-  hand-mapped into an SDK `Tool` object independently in three places:
-  `scripts/verify-run-terminal-docker.ts`, `src/utils/auditorHelper.ts`
-  (`buildAuditorSessionSettings`), and `src/orchestrator/gateLoop.ts`
-  (~line 973).
-- There are two divergent exec-tool handler implementations:
-  `toolHandlers.ts:makeDockerToolHandler` (SSE-streaming via `secureWrite`,
-  enforces `checkActiveOrchestrationSession`, used by `gateLoop.ts`) and
-  `auditorHelper.ts:makeAuditorExecToolHandler` (no streaming, **no**
-  orchestration-lock check, used by `audit-codebase.ts` and, transitively,
-  `review-pr.ts`). Both independently reimplement the same `workingDir`
-  path-traversal check and `truncateOutput`/`sanitizeSensitives` cleanup.
-- `gateLoop.ts` also wires a `run_tests` tool through the same
-  `checkActiveOrchestrationSession` gate alongside `run_terminal_docker`
-  (~line 990), so the unit being extracted cannot be docker-exec-specific
-  without leaving that consumer behind.
+Three present-day call sites construct an exec tool and a permission/lock
+decision around it independently of each other and of `SessionWrapper`'s own
+enablement mechanism: `scripts/verify-run-terminal-docker.ts`,
+`src/utils/auditorHelper.ts`, and `src/orchestrator/gateLoop.ts` (the last of
+these also wires a second tool, `run_tests`, through the same lock decision).
+Two of the three currently branch on session state *inside the tool
+handler's own body* rather than through `enableTools`/`disableTools`, which
+duplicates a decision `SessionWrapper` is already positioned to enforce and
+opens a path for that decision to drift from the single-owner model
+SYS-REQ-028j establishes. This spec extracts a single unit,
+`src/agentSessionCore/`, that both parties -- schema construction and
+lock-state-driven enablement -- route through, and records the call-site
+migration and gateLoop follow-up as separate, dependent issues. It does not
+modify `SessionWrapper` itself or supersede any SYS-REQ-026/027/028
+requirement.
 
-This spec covers the extraction of a self-contained, tool-agnostic "agent
-session" unit into `src/agentSessionCore/` (issue #415), the call-site
-migration onto it (issue #416), and records the deferred, WIP-blocked
-`gateLoop.ts` migration (issue #417) for continuity. It supersedes nothing in
-SYS-REQ-026/027/028 -- `SessionWrapper` itself is unchanged; this unit is a
-consumer of it, the same way the three current call sites are.
+This spec's own current-repo details (file names, line numbers, "as of this
+writing" facts) are confined to this Context section and its footnotes.
+Requirements below describe target behavior only; they are not a record of
+what any file presently does, and should read the same regardless of how the
+current call sites happen to be implemented on a given day.
 
 ---
 
 ## Decisions carried from handoff (not re-litigated here)
 
-- **Directory: `src/agentSessionCore/`.** Not `dockerSession` (too narrow --
-  see the `run_tests` case above) and not `agentSession` alone (the "Core"
-  signals this is the load-bearing primitive other orchestration code sits
-  on top of, not a full orchestration layer itself).
-- **No file moves.** `src/workspace/workspace.ts` and
-  `src/orchestrator/sessionState.ts` stay where they are and are imported by
-  `src/agentSessionCore/`, not relocated into it -- both have consumers
-  (gates, test harnesses, `pathGuard.ts`, `taskManager.ts`, SSE bookkeeping,
-  logging) far outside this unit's scope.
-- **Build approach: hotswap**, mirroring how `SessionWrapper` itself
-  superseded `hardenedSession.ts` and how `getOrCreateSessionWrapper`
-  (`sessionState.ts:410`) coexists with the legacy `getOrCreateSession`.
-  `src/agentSessionCore/` is built and tested standalone under #415 without
-  touching any existing call site; #416 migrates callers one at a time; the
-  three duplicated tool-mapping sites and `makeAuditorExecToolHandler` are
-  left in place, dormant, until their caller has moved.
-- **Lint enforcement is an #416 acceptance criterion, not part of #415.**
-  Mirrors the `no-restricted-syntax` rule added for `SessionWrapper` --
-  see Requirements below for its shape.
+- **Directory: `src/agentSessionCore/`.**
+- **No file moves** of existing shared modules into it -- they are imported,
+  not relocated.
+- **Build approach: hotswap** -- built and tested standalone before any
+  existing call site is touched; migration is a separate, later step.
+- **Lint enforcement of the new boundary is a migration-time task**, not
+  part of the extraction step.
 
 ---
 
 ## Requirements
 
-### Scope and composition (#415)
+### Composition
 
-- **SYS-REQ-029 (Ubiquitous):** `src/agentSessionCore/` **shall** be the
-  single module tree that constructs agent-executed tool schemas (starting
-  with, but not limited to, `run_terminal_docker`) for use with
-  `SessionWrapper`, and that decides the orchestration-lock behavior
-  (SYS-REQ-029e) for each such tool.
+- **SYS-REQ-029:** `src/agentSessionCore/` shall be the sole module tree
+  responsible for (a) constructing agent-executable tool schemas for use
+  with `SessionWrapper`, and (b) deciding, per outgoing turn, which of those
+  tools are enabled, for every consumer that adopts it.
 
-- **SYS-REQ-029a:** `src/agentSessionCore/` **shall** re-export or wrap the
-  following without relocating their source files: `SessionWrapper`
-  (`src/copilotSdk/sessionWrapper.ts`), `getExecCommand`/`getWorkspaceRoot`/
-  `getWorkspaceHostLocation`/`getGitSandbox`/`initializeWorkspace`
-  (`src/workspace/`), `checkActiveOrchestrationSession`
-  (`src/orchestrator/sessionState.ts`), and `runForcedToolTurnUntilTimeout`
-  (`src/utils/toolCallEnforcement.ts`).
+- **SYS-REQ-029a:** `src/agentSessionCore/` shall provide access to
+  `SessionWrapper`, the shared workspace-exec accessor, the
+  orchestration-session-state query, and the forced-tool-turn helper by
+  import, without relocating their defining modules.
 
-- **SYS-REQ-029b:** `src/agentSessionCore/` **shall** expose exactly one
-  canonical tool-definition factory for `run_terminal_docker` -- e.g.
-  `createExecToolDefinition(...)` -- that maps
-  `RUN_TERMINAL_DOCKER_TOOL.function.{name,description,parameters}`
-  (`src/config/tools.ts`) into an SDK `Tool`. No other module **shall**
-  perform this mapping once #416 completes (see SYS-REQ-029m).
+- **SYS-REQ-029b:** `src/agentSessionCore/` shall expose exactly one factory
+  that produces a tool definition for the containerized shell-exec tool. No
+  other module shall construct that tool's wire-level schema once migration
+  onto this unit is complete for a given caller.
 
-- **SYS-REQ-029c:** `src/agentSessionCore/` **shall** expose a top-level
-  session factory -- e.g. `createAgentSession(...)` -- that is tool-agnostic:
-  it **shall** accept an array of tool definitions to register (not only the
-  canonical exec tool), so `gateLoop.ts`'s `run_tests` tool (and any future
-  non-exec tool) can be composed through the same unit rather than being left
-  outside it. The factory **shall** return a configured `SessionWrapper`
-  instance with the supplied tools already registered per SYS-REQ-028a --
-  nothing downstream of `createAgentSession(...)` **shall** re-derive tool
-  schemas by hand.
+- **SYS-REQ-029c:** `src/agentSessionCore/` shall expose a session factory
+  that accepts an arbitrary set of tool definitions (not only the shell-exec
+  tool) and returns a `SessionWrapper` instance with that full set registered
+  as its construction-time tool list (SYS-REQ-028a). A consumer that needs a
+  second, non-exec tool enabled under the same lock policy shall be able to
+  register it through this same factory rather than composing its own
+  session outside the unit.
 
-- **SYS-REQ-029d:** The canonical exec-tool handler (backing
-  SYS-REQ-029b's factory) **shall** perform the `workingDir` path-traversal
-  check and `truncateOutput`/`sanitizeSensitives` output cleanup exactly
-  once, shared by every caller, superseding the duplicated logic currently
-  in both `makeDockerToolHandler` and `makeAuditorExecToolHandler`.
+- **SYS-REQ-029d:** The shell-exec tool's handler shall perform its
+  working-directory traversal check and output-sanitization exactly once,
+  shared by every caller of SYS-REQ-029b's factory, regardless of which
+  lock policy (SYS-REQ-029e) or output-delivery mode (SYS-REQ-029h) that
+  caller selects.
 
-### Orchestration-lock: explicit, not defaulted
+### Orchestration-lock as enablement, not a parallel gate
 
-The handoff flags this as needing "an explicit decision during #415/#416,
-not an accident of whichever handler gets kept." The resolution below keeps
-it a per-call-site decision rather than picking one of the two existing
-behaviors as a silent default:
+- **SYS-REQ-029e:** `src/agentSessionCore/` shall expose exactly one
+  mechanism for making a tool's availability conditional on live
+  orchestration-session state: driving `SessionWrapper.enableTools`/
+  `disableTools` for that tool before each turn is sent, so that rejection
+  of a disabled tool's call is enforced by `SessionWrapper`'s own
+  `onPermissionRequest` (SYS-REQ-028d), not by a second check inside the
+  tool's own handler body. A tool handler constructed by this unit shall not
+  itself read orchestration-session state to decide whether to execute.
 
-- **SYS-REQ-029e:** The canonical exec-tool handler factory **shall**
-  require an explicit `orchestrationLock` parameter with no default value.
-  Omitting it **shall** be a compile-time (TypeScript) error, not a runtime
-  fallback. Valid values:
-  - `'enforced'` -- wraps the handler with `checkActiveOrchestrationSession`
-    exactly as `makeDockerToolHandler` does today (rejects with the existing
-    "requires an active, authorized orchestration session context" message
-    when the gate fails).
-  - `'bypassed'` -- no gate check, exactly as `makeAuditorExecToolHandler`
-    does today.
+- **SYS-REQ-029f:** A consumer of SYS-REQ-029c's session factory shall
+  select, per registered lock-eligible tool and with no default value, one
+  of:
+  - **locked** -- before each turn, the unit shall query current
+    orchestration-session state and call `enableTools`/`disableTools`
+    accordingly for that tool.
+  - **unlocked** -- the tool shall remain enabled for the lifetime of the
+    session, unaffected by orchestration-session state.
 
-  This turns the divergence identified in #415/#416 into a mandatory,
-  visible choice at every call site instead of leaving it implicit in which
-  of the two legacy handlers a given caller happened to copy.
+  Omitting this selection for a lock-eligible tool shall be a compile-time
+  error.
 
-- **SYS-REQ-029f (Unwanted Behavior):** **If** a call site constructs the
-  canonical exec-tool handler without supplying `orchestrationLock`, **then**
-  the build **shall** fail to compile.
+- **SYS-REQ-029g (Unwanted Behavior):** If a tool registered as **locked**
+  is called while orchestration-session state indicates it should be
+  disabled, then the call shall be rejected at `SessionWrapper`'s permission
+  layer with a message identifying the required condition, and the tool's
+  schema shall still be present in the session's `tools` payload
+  (consistent with SYS-REQ-028/028d).
 
-- **SYS-REQ-029g:** SSE stream write-back (`secureWrite`/`res`, currently
-  baked into `makeDockerToolHandler` only) **shall** be an independent,
-  optional parameter of the canonical handler factory, orthogonal to
-  `orchestrationLock`. This is required because the three concrete
-  combinations in use today are not the same axis:
-  - `gateLoop.ts`: streaming **and** `'enforced'`.
-  - `audit-codebase.ts` / `review-pr.ts` (via `auditorHelper.ts`):
-    non-streaming **and** `'bypassed'`.
-  - `verify-run-terminal-docker.ts`: non-streaming **and** `'bypassed'`,
-    against a real container.
+- **SYS-REQ-029h:** Delivery of a tool call's output back to any external
+  stream (e.g. a caller-supplied write-back callback) shall be an
+  independently selectable option of SYS-REQ-029c's factory, orthogonal to
+  the lock selection in SYS-REQ-029f -- a consumer shall be able to choose
+  any combination of {locked, unlocked} × {streamed, unstreamed} without
+  requiring a bespoke handler outside this unit.
 
-  Collapsing streaming and lock-mode into one flag would force a fourth,
-  bespoke handler back into existence the next time a caller needs a
-  combination other than these three -- exactly the duplication this
-  extraction exists to close.
+- **SYS-REQ-029i:** Each consumer's lock selection (SYS-REQ-029f) shall be
+  accompanied, at the call site, by a short rationale for that choice. This
+  requirement is about the decision being visible and deliberate at every
+  call site, not about which value is chosen.
 
-- **SYS-REQ-029h:** Every #416 call-site migration **shall** record, in a
-  code comment at the call site, which `orchestrationLock` value it passes
-  and one sentence of rationale. This satisfies #416's acceptance criterion
-  that the lock behavior be "a deliberate, documented choice," and gives
-  reviewers a single grep target (`orchestrationLock:`) to audit all
-  decisions at once during #416 review.
+### Migration (tracked as a dependent issue)
 
-### Raw/bypass mode for `verify-run-terminal-docker.ts` (#416)
+- **SYS-REQ-029j:** Once `src/agentSessionCore/` independently satisfies
+  SYS-REQ-029a through SYS-REQ-029i, every existing constructor of the
+  shell-exec tool's schema shall be replaced with SYS-REQ-029b's factory,
+  and every existing handler that reads orchestration-session state directly
+  shall be replaced with SYS-REQ-029e's enablement-driven mechanism.
 
-- **SYS-REQ-029i:** `verify-run-terminal-docker.ts` **shall** migrate to
-  `createExecToolDefinition(...)` with `orchestrationLock: 'bypassed'` and no
-  streaming callback, rather than keeping its local `makeExecToolHandler()`.
-  This does not reintroduce a fourth handler (SYS-REQ-029g already makes
-  `'bypassed'` + non-streaming an expressible, shared combination) and
-  preserves the script's own documented intent -- exercising "the exact
-  production handler" -- more faithfully than the current copy, since
-  after migration the script and `auditorHelper.ts` genuinely share one
-  implementation instead of two independently-drifting ones.
-- **SYS-REQ-029i-1:** This migration **shall not** change
-  `verify-run-terminal-docker.ts`'s observable pass/fail behavior against a
-  real container (#416 acceptance criterion) -- canary-file and
-  workspace-root assertions are unaffected by which module constructed the
-  tool definition.
+- **SYS-REQ-029k:** A handler that reimplements the shell-exec tool's
+  traversal check or output handling outside this unit shall be removed once
+  its caller has migrated under SYS-REQ-029j.
 
-### Call-site migration (#416)
+- **SYS-REQ-029l:** A lint rule shall restrict direct construction of the
+  shell-exec tool's wire-level schema to `src/agentSessionCore/`, mirroring
+  the existing rule restricting `createSession`/`resumeSession` to
+  `SessionWrapper`. This rule shall be introduced as part of migration
+  (SYS-REQ-029j), not as part of the unit's own extraction.
 
-- **SYS-REQ-029j:** Once `src/agentSessionCore/` passes its own tests
-  (#415), `scripts/verify-run-terminal-docker.ts`, `scripts/audit-codebase.ts`
-  (via `auditorHelper.ts:buildAuditorSessionSettings`), and
-  `scripts/review-pr.ts` (via `auditorHelper.ts:executeAuditSession`)
-  **shall** construct their `run_terminal_docker` tool exclusively through
-  `createExecToolDefinition(...)` (SYS-REQ-029b), not via manual
-  `RUN_TERMINAL_DOCKER_TOOL.function.*` mapping.
-- **SYS-REQ-029k:** `auditorHelper.ts:makeAuditorExecToolHandler` **shall**
-  be deleted once `buildAuditorSessionSettings` and `executeAuditSession`
-  both route through SYS-REQ-029j, per SYS-REQ-029b's "no other module
-  performs this mapping" clause.
-- **SYS-REQ-029l:** A `no-restricted-syntax` (or `no-restricted-imports`)
-  lint rule **shall** be added, mirroring the `createSession`/`resumeSession`
-  rule in `eslint.config.js`, restricting direct references to
-  `RUN_TERMINAL_DOCKER_TOOL.function.*` outside `src/agentSessionCore/`
-  itself. This is the #415/#416 boundary's enforcement mechanism and
-  **shall** land as part of #416 (per the handoff's "enforcement is a
-  migration task, not part of the extraction issue").
-- **SYS-REQ-029m:** `runForcedToolTurnUntilTimeout` call sites in the three
-  #416 consumers **shall** be updated to take the `SessionWrapper` produced
-  by `createAgentSession(...)` (SYS-REQ-029c), consistent with its existing
-  signature (`wrapper: SessionWrapper`, ...) -- no change to
-  `toolCallEnforcement.ts` itself is implied by this spec.
+- **SYS-REQ-029m:** A migration under SYS-REQ-029j shall not change the
+  observable pass/fail behavior of any test that currently exercises the
+  real exec path end-to-end against a live container.
 
-### `gateLoop.ts` (#417, deferred)
+### Deferred consumer
 
-- **SYS-REQ-029n (Deferred):** Migrating `gateLoop.ts`'s two
-  `loopSessionOptions`/`getOrCreateSession` call sites (~line 965-1013,
-  ~line 1805) onto `createAgentSession(...)` is filed for tracking only
-  (issue #417) and **shall not** begin before gateLoop's own design has
-  stabilized, per #417's stated status. When it does happen: `gateLoop.ts`
-  currently registers `run_terminal_docker` **and** `run_tests` under the
-  same `checkActiveOrchestrationSession` gate in one `tools` array
-  (~line 973-1010) plus a session-level `onPermissionRequest:
-  handleGateRunPermission` -- SYS-REQ-029c's tool-agnostic factory shape is
-  a prerequisite for expressing this without special-casing gateLoop, but
-  folding `handleGateRunPermission` into `enableTools`/`disableTools` (as
-  #417 proposes) is out of scope for this spec and belongs to gateLoop's own
-  design work.
+- **SYS-REQ-029n (Deferred):** A consumer whose own control-flow design is
+  still in active revision shall not be migrated under SYS-REQ-029j until
+  that consumer's design has stabilized; its migration is tracked as a
+  separate, dependent, currently-inactive issue. When that consumer migrates,
+  any of its own permission-handling logic that duplicates
+  `SessionWrapper`'s enablement mechanism shall be folded into
+  `enableTools`/`disableTools` calls rather than carried forward as a
+  separate `onPermissionRequest` override -- but this folding is that
+  consumer's own design work and is out of scope for this spec.
 
 ---
 
 ## Test coverage implied by this spec
 
-1. **No re-derivation outside the unit (029, 029b):** assert (via the
-   SYS-REQ-029l lint rule, plus a unit test enumerating `src/agentSessionCore/`
-   as the sole importer of `RUN_TERMINAL_DOCKER_TOOL.function.*` post-#416)
-   that no other module maps the raw tool schema by hand.
-2. **Tool-agnostic factory (029c):** construct `createAgentSession(...)` with
-   two tool definitions, one of them not `run_terminal_docker` (e.g. a stub
-   mirroring `run_tests`'s shape); assert both are present in the returned
-   `SessionWrapper`'s construction-time tool list (SYS-REQ-028a).
-3. **Shared cleanup logic (029d):** assert a `workingDir` containing `..`
-   is rejected identically regardless of `orchestrationLock` value or
-   streaming callback presence; assert `truncateOutput`/`sanitizeSensitives`
-   is applied exactly once per call, not duplicated.
-4. **Explicit lock, no default (029e, 029f):** a TypeScript compile-only
-   test (`// @ts-expect-error`) asserting `createExecToolDefinition({...})`
-   without `orchestrationLock` fails to compile.
-5. **`'enforced'` gates, `'bypassed'` doesn't (029e):** with an
-   `orchestrationLock: 'enforced'` handler and no active orchestration
-   session, assert the call is rejected with the existing gate message;
-   with `'bypassed'`, assert the same setup executes the command.
-6. **Streaming is orthogonal (029g):** construct with
-   `orchestrationLock: 'bypassed'` and a streaming callback supplied; assert
-   both the gate is skipped and the streaming callback fires. Construct the
-   inverse (`'enforced'`, no callback); assert the gate runs and no
-   streaming write is attempted.
-7. **Verify-script parity (029i, 029i-1):** re-run
-   `verify-run-terminal-docker.ts`'s existing canary/workspace-root/exit-code
-   assertions post-migration; all three **shall** still pass unchanged
-   against a real container.
-8. **`auditorHelper.ts` cleanup (029k):** assert
-   `makeAuditorExecToolHandler` is no longer exported/referenced once
-   `buildAuditorSessionSettings` migrates.
+1. **Sole schema constructor (029, 029b, 029l):** assert no module outside
+   `src/agentSessionCore/` constructs the shell-exec tool's wire-level
+   schema, once migration (029j) is complete for a given caller.
+2. **Tool-agnostic factory (029c):** register a non-exec tool alongside the
+   shell-exec tool through the same factory; assert both appear in the
+   resulting `SessionWrapper`'s construction-time tool list.
+3. **Shared handler logic (029d):** assert the traversal check and output
+   sanitization behave identically across every {lock, delivery} combination
+   the factory supports.
+4. **No handler-internal gating (029e):** assert the shell-exec tool's
+   handler function never reads orchestration-session state itself; assert
+   rejection of a disabled call originates from `SessionWrapper`'s
+   `onPermissionRequest`, not from the handler.
+5. **Lock is mandatory, no default (029f):** a compile-only test asserting
+   omission of the lock selection for a lock-eligible tool fails to build.
+6. **Locked rejects, unlocked doesn't (029g):** with a tool registered
+   **locked** and orchestration-session state indicating disablement, assert
+   the call is rejected and the schema remains present in `tools`; with the
+   same tool **unlocked**, assert the call succeeds under identical session
+   state.
+7. **Lock and delivery are independent (029h):** exercise all four
+   {locked, unlocked} × {streamed, unstreamed} combinations; assert each
+   behaves correctly on both axes independently.
+8. **Migration parity (029m):** re-run the existing live-container
+   verification test after migrating its tool construction onto this unit;
+   assert its pass/fail outcome is unchanged.
 
 ---
 
 ## Open Questions
 
-1. **Whether `checkActiveOrchestrationSession` itself should physically move**
-   from `src/orchestrator/sessionState.ts` into `src/agentSessionCore/`
-   (currently: imported, not moved, per the handoff). Flagged there as a
-   separate, independently reviewable step if/when it happens -- not
-   resolved by this spec.
+1. **Whether the orchestration-session-state query itself should physically
+   move** into `src/agentSessionCore/` rather than being imported from its
+   current location. Flagged as a separate, independently reviewable step
+   if/when it happens -- not resolved by this spec.
 2. **`SessionWrapper.adopt()`** remains an unresolved escape hatch pending
-   owner sign-off (see `sessionWrapper.ts`'s own TODO(#78) comments on
-   SYS-REQ-028f/028j tension). Unrelated to this extraction, but
-   `createAgentSession(...)` (SYS-REQ-029c) should be checked against it
-   during implementation: if any #416/#417 consumer needs to adopt an
-   already-created session (as `audit-codebase.ts`/`gateLoop.ts` do
-   elsewhere via `SessionPolicy`), the factory may need an `adopt`-based
-   variant rather than assuming construction-only use. Not decided here.
-3. **Rationale-comment enforcement (SYS-REQ-029h)** is specified as a
-   code-review convention (grep-able comment), not a machine-checked rule.
-   Whether it's worth a custom lint rule (e.g. requiring a `// lock-rationale:`
-   comment adjacent to every `orchestrationLock:` literal) is left to #416
-   implementation judgment -- called out here so it isn't silently dropped.
+   owner sign-off. If any migrated consumer needs to adopt an
+   already-created session rather than construct one fresh, SYS-REQ-029c's
+   factory may need an adopt-based variant -- not decided here.
+3. **Per-turn lock re-evaluation cost (029f "locked"):** re-querying
+   orchestration-session state and calling `enableTools`/`disableTools`
+   before every turn is cheap for the current in-memory session-state model,
+   but this spec does not commit to that remaining true if the underlying
+   state query becomes more expensive (e.g. moves off-process). Worth
+   revisiting if that query's cost profile changes.
