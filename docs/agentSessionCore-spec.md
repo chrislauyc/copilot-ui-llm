@@ -142,17 +142,6 @@ current call sites happen to be implemented on a given day.
   observable pass/fail behavior of any test that currently exercises the
   real exec path end-to-end against a live container.
 
-### Consumer with an unstable design
-
-- **SYS-REQ-029n:** A consumer whose own control-flow design is still in
-  active revision shall not be migrated under SYS-REQ-029j until that
-  consumer's design has stabilized. When such a consumer does migrate, any
-  of its own permission-handling logic that duplicates `SessionWrapper`'s
-  enablement mechanism shall be folded into `enableTools`/`disableTools`
-  calls rather than carried forward as a separate `onPermissionRequest`
-  override -- but this folding is that consumer's own design work and is
-  out of scope for this spec.
-
 ---
 
 ## Test coverage implied by this spec
