@@ -20,10 +20,11 @@ duplicates a decision `SessionWrapper` is already positioned to enforce and
 opens a path for that decision to drift from the single-owner model
 SYS-REQ-028j establishes. This spec extracts a single unit,
 `src/agentSessionCore/`, that both parties -- schema construction and
-lock-state-driven enablement -- route through, and records the call-site
-migration and gateLoop follow-up as separate, dependent issues. It does not
-modify `SessionWrapper` itself or supersede any SYS-REQ-026/027/028
-requirement.
+lock-state-driven enablement -- route through. The call-site migration and
+gateLoop follow-up are tracked entirely on their own issues (#416, #417),
+not in this spec: this spec covers only the unit's own target behavior,
+independent of who has adopted it. It does not modify `SessionWrapper`
+itself or supersede any SYS-REQ-026/027/028 requirement.
 
 This spec's own current-repo details (file names, line numbers, "as of this
 writing" facts) are confined to this Context section and its footnotes.
@@ -60,9 +61,7 @@ current call sites happen to be implemented on a given day.
   import, without relocating their defining modules.
 
 - **SYS-REQ-029b:** `src/agentSessionCore/` shall expose exactly one factory
-  that produces a tool definition for the containerized shell-exec tool. No
-  other module shall construct that tool's wire-level schema once migration
-  onto this unit is complete for a given caller.
+  that produces a tool definition for the containerized shell-exec tool.
 
 - **SYS-REQ-029c:** `src/agentSessionCore/` shall expose a session factory
   that accepts an arbitrary set of tool definitions (not only the shell-exec
@@ -120,58 +119,34 @@ current call sites happen to be implemented on a given day.
   requirement is about the decision being visible and deliberate at every
   call site, not about which value is chosen.
 
-### Migration (tracked as a dependent issue)
-
-- **SYS-REQ-029j:** Once `src/agentSessionCore/` independently satisfies
-  SYS-REQ-029a through SYS-REQ-029i, every existing constructor of the
-  shell-exec tool's schema shall be replaced with SYS-REQ-029b's factory,
-  and every existing handler that reads orchestration-session state directly
-  shall be replaced with SYS-REQ-029e's enablement-driven mechanism.
-
-- **SYS-REQ-029k:** A handler that reimplements the shell-exec tool's
-  traversal check or output handling outside this unit shall be removed once
-  its caller has migrated under SYS-REQ-029j.
-
-- **SYS-REQ-029l:** A lint rule shall restrict direct construction of the
-  shell-exec tool's wire-level schema to `src/agentSessionCore/`, mirroring
-  the existing rule restricting `createSession`/`resumeSession` to
-  `SessionWrapper`. This rule shall be introduced as part of migration
-  (SYS-REQ-029j), not as part of the unit's own extraction.
-
-- **SYS-REQ-029m:** A migration under SYS-REQ-029j shall not change the
-  observable pass/fail behavior of any test that currently exercises the
-  real exec path end-to-end against a live container.
-
 ---
 
 ## Test coverage implied by this spec
 
-1. **Sole schema constructor (029, 029b, 029l):** assert no module outside
-   `src/agentSessionCore/` constructs the shell-exec tool's wire-level
-   schema, once migration (029j) is complete for a given caller.
-2. **Tool-agnostic factory (029c):** register a non-exec tool alongside the
+1. **Tool-agnostic factory (029c):** register a non-exec tool alongside the
    shell-exec tool through the same factory; assert both appear in the
    resulting `SessionWrapper`'s construction-time tool list.
-3. **Shared handler logic (029d):** assert the traversal check and output
+2. **Shared handler logic (029d):** assert the traversal check and output
    sanitization behave identically across every {lock, delivery} combination
    the factory supports.
-4. **No handler-internal gating (029e):** assert the shell-exec tool's
+3. **No handler-internal gating (029e):** assert the shell-exec tool's
    handler function never reads orchestration-session state itself; assert
    rejection of a disabled call originates from `SessionWrapper`'s
    `onPermissionRequest`, not from the handler.
-5. **Lock is mandatory, no default (029f):** a compile-only test asserting
+4. **Lock is mandatory, no default (029f):** a compile-only test asserting
    omission of the lock selection for a lock-eligible tool fails to build.
-6. **Locked rejects, unlocked doesn't (029g):** with a tool registered
+5. **Locked rejects, unlocked doesn't (029g):** with a tool registered
    **locked** and orchestration-session state indicating disablement, assert
    the call is rejected and the schema remains present in `tools`; with the
    same tool **unlocked**, assert the call succeeds under identical session
    state.
-7. **Lock and delivery are independent (029h):** exercise all four
+6. **Lock and delivery are independent (029h):** exercise all four
    {locked, unlocked} × {streamed, unstreamed} combinations; assert each
    behaves correctly on both axes independently.
-8. **Migration parity (029m):** re-run the existing live-container
-   verification test after migrating its tool construction onto this unit;
-   assert its pass/fail outcome is unchanged.
+
+Migration-completion assertions (sole schema constructor once migrated,
+live-container pass/fail parity across migration) are acceptance criteria
+for issue #416, not test coverage for this extraction spec.
 
 ---
 
