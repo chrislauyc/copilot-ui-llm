@@ -1,4 +1,4 @@
-import { runGate } from '../src/gates/index';
+import { runGate } from '../src/orchestration/gates';
 import { normalizeGates } from '../src/config/gates';
 
 async function main() {

@@ -1,4 +1,4 @@
-import { CopilotEvent, TurnData } from './mockEvents';
+import { CopilotEvent, TurnData } from './ui/mockEvents';
 
 export interface RunGateLoopRequest {
   readonly prompt: string;

@@ -7,10 +7,10 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
   }
 }
 import type { Server } from 'node:http';
-import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
-import { getReviewerExecutionConfig, makeAuditorExecToolHandler } from '../src/utils/auditorHelper';
-import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/copilotSdk/boundary';
-import { SessionWrapper, type SessionListenerEntry } from '../src/copilotSdk/sessionWrapper';
+import { app, setActiveOpenRouterSessionId } from '../src/orchestration/serverRuntime';
+import { getReviewerExecutionConfig, makeAuditorExecToolHandler } from '../src/agentCore/auditorHelper';
+import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/agentCore/copilotSdk/boundary';
+import { SessionWrapper, type SessionListenerEntry } from '../src/agentCore/copilotSdk/sessionWrapper';
 import {
   createMakeCommitTool,
   createRenameBranchTool,

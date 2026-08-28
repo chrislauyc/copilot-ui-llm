@@ -9,11 +9,11 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
 import { writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { Server } from 'node:http';
-import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
-import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction, makeAuditorExecToolHandler } from '../src/utils/auditorHelper';
-import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/copilotSdk/boundary';
-import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
+import { app, setActiveOpenRouterSessionId } from '../src/orchestration/serverRuntime';
+import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction, makeAuditorExecToolHandler } from '../src/agentCore/auditorHelper';
+import { runForcedToolTurnUntilTimeout } from '../src/agentCore/toolCallEnforcement';
+import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/agentCore/copilotSdk/boundary';
+import { SessionWrapper } from '../src/agentCore/copilotSdk/sessionWrapper';
 import { createRunGhCommandTool, RUN_GH_COMMAND_TOOL_NAME, type RunGhCommandArgs } from './tools/agentGhTool';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../src/config/tools';
 
