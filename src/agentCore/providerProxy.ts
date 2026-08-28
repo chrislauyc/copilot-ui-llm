@@ -14,16 +14,9 @@ import type { Express } from 'express';
  * that `app` as a parameter so `orchestration/serverRuntime.ts` wires it in
  * via a real import/mount, rather than sharing module scope with it.
  *
- * `agentCore` generally avoids importing from `orchestration` to keep this
- * module able to run standalone (see the module doc above), so logging here
- * is taken as an injected dependency (`writeLog`) rather than imported
- * directly from `orchestration/orchestrator/sessionState`. This is a
- * convention followed on a best-effort basis, not an enforced boundary --
- * a few other agentCore modules (e.g. `workspace/git.ts`, `toolHandlers.ts`)
- * do import from `orchestration` today for types/state that haven't been
- * decoupled yet. If this boundary needs to be load-bearing, add an eslint
- * `no-restricted-imports` rule for it; until then, treat it as a soft
- * default for new agentCore code rather than a guarantee.
+ * `agentCore` must never import from `orchestration`, so logging is taken
+ * as an injected dependency (`writeLog`) rather than imported directly from
+ * `orchestration/orchestrator/sessionState`.
  */
 
 /**

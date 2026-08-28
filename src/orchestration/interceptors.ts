@@ -1,5 +1,4 @@
-import { sensitiveValuesCache, writeLog, LogLevel } from './orchestrator/sessionState';
-import { sanitizeSensitives } from '../shared/utils/sanitizers';
+import { writeLog, LogLevel } from './orchestrator/sessionState';
 
 let isInterceptingConsole = false;
 
@@ -55,13 +54,11 @@ export function installConsoleInterceptors() {
   console.log = function(...args: unknown[]) {
     const message = args.map(serializeArg).join(' ');
     
-    const sanitizedMessage = sanitizeSensitives(message, sensitiveValuesCache || new Set());
-    
     // Avoid logging our own level-prefixed logs back to writeLog to prevent recursion or redundancy
     if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
-      writeLog(sanitizedMessage, LogLevel.DEBUG);
+      writeLog(message, LogLevel.DEBUG);
     }
-    return originalLog!.apply(console, [sanitizedMessage]);
+    return originalLog!.apply(console, [message]);
   };
 
   // Intercept console.warn
@@ -69,16 +66,14 @@ export function installConsoleInterceptors() {
   console.warn = function(...args: unknown[]) {
     const message = args.map(serializeArg).join(' ');
     
-    const sanitizedMessage = sanitizeSensitives(message, sensitiveValuesCache || new Set());
-    
     if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
-      writeLog(sanitizedMessage, LogLevel.WARN);
+      writeLog(message, LogLevel.WARN);
     }
     
     const wasIntercepting = isInterceptingConsole;
     isInterceptingConsole = true;
     try {
-      return originalWarn!.apply(console, [sanitizedMessage]);
+      return originalWarn!.apply(console, [message]);
     } finally {
       isInterceptingConsole = wasIntercepting;
     }
@@ -89,16 +84,14 @@ export function installConsoleInterceptors() {
   console.error = function(...args: unknown[]) {
     const message = args.map(serializeArg).join(' ');
     
-    const sanitizedMessage = sanitizeSensitives(message, sensitiveValuesCache || new Set());
-    
     if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
-      writeLog(sanitizedMessage, LogLevel.ERROR);
+      writeLog(message, LogLevel.ERROR);
     }
     
     const wasIntercepting = isInterceptingConsole;
     isInterceptingConsole = true;
     try {
-      return originalError!.apply(console, [sanitizedMessage]);
+      return originalError!.apply(console, [message]);
     } finally {
       isInterceptingConsole = wasIntercepting;
     }
