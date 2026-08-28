@@ -5,6 +5,8 @@ import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../config/tools';
 import { getExecCommand } from './workspace';
+import { sanitizeSensitives } from '../shared/utils/sanitizers';
+import { truncateOutput } from '../shared/utils/formatters';
 
 
 /**
@@ -248,8 +250,8 @@ export function makeAuditorExecToolHandler(abortSignal?: AbortSignal) {
     const execCommand = getExecCommand();
     const result = await execCommand((record.command as string) || '', abortSignal);
     return {
-      stdout: result.stdout,
-      stderr: result.stderr,
+      stdout: truncateOutput(sanitizeSensitives(result.stdout)),
+      stderr: truncateOutput(sanitizeSensitives(result.stderr)),
       exitCode: result.exitCode,
     };
   };

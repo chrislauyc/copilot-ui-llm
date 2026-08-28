@@ -11,8 +11,8 @@ export default [
       "no-restricted-imports": ["error", {
         "patterns": [
           {
-            "group": ["src/workspace/**/*"],
-            "message": "❌ Avoid importing internal workspace modules directly. Import from 'src/workspace/index.ts' (the public API barrel) instead.",
+            "group": ["src/agentCore/workspace/**/*"],
+            "message": "❌ Avoid importing internal workspace modules directly. Import from 'src/agentCore/workspace/index.ts' (the public API barrel) instead.",
             "importNames": ["*"]
           }
         ]
@@ -21,7 +21,7 @@ export default [
   },
   {
     // Issue #246: CopilotClient.createSession/resumeSession must only be
-    // called from SessionWrapper (src/copilotSdk/sessionWrapper.ts), which
+    // called from SessionWrapper (src/agentCore/copilotSdk/sessionWrapper.ts), which
     // binds and re-derives a session's tool policy on every create/resume.
     // Calling either method anywhere else can silently drop
     // `availableTools`/`onPermissionRequest`/`autoApproveAll` (the exact
@@ -38,8 +38,8 @@ export default [
     // client itself (e.g. proxy/integration tests), not SessionWrapper.
     files: ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
     ignores: [
-      "src/copilotSdk/boundary.ts",
-      "src/copilotSdk/sessionWrapper.ts",
+      "src/agentCore/copilotSdk/boundary.ts",
+      "src/agentCore/copilotSdk/sessionWrapper.ts",
       // Manual, human-triggered SDK-baseline capture (issue #345 follow-up),
       // not a call site the wrapper needs to police -- see the file's own
       // header comment for why it lives under src/test/ despite not being a
@@ -51,18 +51,18 @@ export default [
     rules: {
       "no-restricted-syntax": ["error", {
         "selector": "CallExpression[callee.property.name='createSession']",
-        "message": "❌ Do not call CopilotClient.createSession directly. Use SessionWrapper from src/copilotSdk/sessionWrapper.ts so the session's tool policy is bound and enforced (issue #246, SYS-REQ-026/027). If this call site predates the wrapper and hasn't been migrated yet, add a documented eslint-disable-next-line referencing the issue rather than removing this rule."
+        "message": "❌ Do not call CopilotClient.createSession directly. Use SessionWrapper from src/agentCore/copilotSdk/sessionWrapper.ts so the session's tool policy is bound and enforced (issue #246, SYS-REQ-026/027). If this call site predates the wrapper and hasn't been migrated yet, add a documented eslint-disable-next-line referencing the issue rather than removing this rule."
       }, {
         "selector": "CallExpression[callee.property.name='resumeSession']",
-        "message": "❌ Do not call CopilotClient.resumeSession directly. Use SessionWrapper from src/copilotSdk/sessionWrapper.ts so the full tool policy (availableTools/onPermissionRequest/autoApproveAll) is re-derived on resume instead of risking a partial config (issue #246, SYS-REQ-026/027). If this call site predates the wrapper and hasn't been migrated yet, add a documented eslint-disable-next-line referencing the issue rather than removing this rule."
+        "message": "❌ Do not call CopilotClient.resumeSession directly. Use SessionWrapper from src/agentCore/copilotSdk/sessionWrapper.ts so the full tool policy (availableTools/onPermissionRequest/autoApproveAll) is re-derived on resume instead of risking a partial config (issue #246, SYS-REQ-026/027). If this call site predates the wrapper and hasn't been migrated yet, add a documented eslint-disable-next-line referencing the issue rather than removing this rule."
       }]
     }
   },
   {
     files: [
-      "src/orchestrator/**/*.ts",
-      "src/orchestrator/**/*.tsx",
-      "src/copilotSdk/boundary.ts"
+      "src/orchestration/orchestrator/**/*.ts",
+      "src/orchestration/orchestrator/**/*.tsx",
+      "src/agentCore/copilotSdk/boundary.ts"
     ],
     plugins: {
       "@typescript-eslint": tsPlugin

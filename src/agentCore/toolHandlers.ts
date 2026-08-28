@@ -1,5 +1,7 @@
 import { getExecCommand } from './workspace';
 import { LogLevel } from '../orchestration/orchestrator/sessionState';
+import { sanitizeSensitives } from '../shared/utils/sanitizers';
+import { truncateOutput } from '../shared/utils/formatters';
 
 
 export function makeDockerToolHandler(
@@ -19,8 +21,8 @@ export function makeDockerToolHandler(
     writeLog(`[run_terminal_docker] Completed with exit code ${result.exitCode}. Stdout length: ${result.stdout.length}, Stderr length: ${result.stderr.length}`, LogLevel.DEBUG);
 
     return {
-      stdout: result.stdout,
-      stderr: result.stderr,
+      stdout: truncateOutput(sanitizeSensitives(result.stdout, sensitiveValuesCache || new Set())),
+      stderr: truncateOutput(sanitizeSensitives(result.stderr, sensitiveValuesCache || new Set())),
       exitCode: result.exitCode
     };
   };
