@@ -20,7 +20,7 @@ describe('Panic Stop REST API Integration Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/panic_stop.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/panic_stop.yaml');
     
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'panic-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');

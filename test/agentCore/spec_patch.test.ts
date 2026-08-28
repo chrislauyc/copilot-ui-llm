@@ -21,7 +21,7 @@ describe('Spec Patch REST API Integration Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_patch.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/spec_patch.yaml');
     
     const relativeCwd = 'spec-patch-' + Math.random().toString(36).substring(2, 8);
     const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);

@@ -44,7 +44,7 @@ describe('Auditor rotation pool against real SDK/proxy transport (Issue 79 + Iss
 
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/gate_loop/auditor_rotation_immediate_tool_call.yaml'
+      'test/snapshots/gate_loop/auditor_rotation_immediate_tool_call.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
   }, 30000);

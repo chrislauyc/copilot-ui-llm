@@ -35,7 +35,7 @@ describe("dockerRunner path resolution off WORKSPACE_HOST_LOCATION", () => {
     clearRunnerEnv();
     vi.resetModules();
 
-    const docker = await import("../../src/workspace/dockerRunner.js");
+    const docker = await import("../../src/agentCore/workspace/dockerRunner.js");
 
     assert.strictEqual(docker.getWorkspaceRoot(), "/tmp/applet_workspace");
     assert.strictEqual(docker.getGitDir(), "/tmp/applet_workspace/snapshots/.git");
@@ -46,7 +46,7 @@ describe("dockerRunner path resolution off WORKSPACE_HOST_LOCATION", () => {
     process.env.WORKSPACE_HOST_LOCATION = "/custom/host/workspace";
     vi.resetModules();
 
-    const docker = await import("../../src/workspace/dockerRunner.js");
+    const docker = await import("../../src/agentCore/workspace/dockerRunner.js");
 
     assert.strictEqual(docker.getWorkspaceRoot(), "/custom/host/workspace");
     assert.strictEqual(docker.getWorkspaceHostLocation(), "/custom/host/workspace");
@@ -63,7 +63,7 @@ describe("dockerRunner path resolution off WORKSPACE_HOST_LOCATION", () => {
     process.env.WORKSPACE_HOST_LOCATION = "/another/custom/path";
     vi.resetModules();
 
-    const docker = await import("../../src/workspace/dockerRunner.js");
+    const docker = await import("../../src/agentCore/workspace/dockerRunner.js");
 
     assert.strictEqual(docker.getWorkspaceRoot(), docker.getWorkspaceHostLocation());
   });
@@ -75,7 +75,7 @@ describe("getRunner() Docker branch delegation", () => {
     process.env.WORKSPACE_HOST_LOCATION = "/delegated/path";
     vi.resetModules();
 
-    const workspace = await import("../../src/workspace/workspace.js");
+    const workspace = await import("../../src/agentCore/workspace/workspace.js");
 
     assert.strictEqual(workspace.getWorkspaceRoot(), "/delegated/path");
     assert.strictEqual(workspace.getWorkspaceHostLocation(), "/delegated/path");

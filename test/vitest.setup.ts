@@ -8,7 +8,7 @@ export function __setGitSandboxForTests(sandbox: unknown): void {
   _testSandboxOverride = sandbox;
 }
 
-vi.mock('../workspace/workspace', async (importOriginal) => {
+vi.mock('../src/agentCore/workspace/workspace', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/agentCore/workspace/workspace')>();
   return {
     ...actual,

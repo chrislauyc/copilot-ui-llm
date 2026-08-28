@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockExecCommand = vi.fn(async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }));
 
-vi.mock('../workspace', () => ({
+vi.mock('../../src/agentCore/workspace', () => ({
   getExecCommand: () => mockExecCommand,
 }));
 

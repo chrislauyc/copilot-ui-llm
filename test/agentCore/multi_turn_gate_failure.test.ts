@@ -21,7 +21,7 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/multi_turn_gate_failure.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/multi_turn_gate_failure.yaml');
     
     // Set up a mock workspaces directory under the OS temp root
     const relativeCwd = 'multi-turn-' + Math.random().toString(36).substring(2, 8);

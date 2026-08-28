@@ -5,8 +5,8 @@ import { db } from '../../src/orchestration/db';
 import { saveSpec } from '../../src/orchestration/db/taskStore';
 import { getWorkspaceRoot } from '../../src/agentCore/workspace';
 
-vi.mock('../utils/auditorHelper', async () => {
-  const actual = await vi.importActual<typeof import('../../src/agentCore/auditorHelper')>('../utils/auditorHelper');
+vi.mock('../../src/agentCore/auditorHelper', async () => {
+  const actual = await vi.importActual<typeof import('../../src/agentCore/auditorHelper')>('../../src/agentCore/auditorHelper');
   return {
     ...actual,
     getAuditorExecutionConfig: () => ({ model: 'mock-model', provider: undefined }),

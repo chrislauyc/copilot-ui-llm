@@ -21,7 +21,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/panic_stop.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/panic_stop.yaml');
     
     const relativeCwd = 'checkpoint-' + Math.random().toString(36).substring(2, 8);
     const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
@@ -117,7 +117,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/panic_stop.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/panic_stop.yaml');
     
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'checkpoint-explicit-'));
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');

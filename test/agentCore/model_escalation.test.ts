@@ -21,7 +21,7 @@ describe('Model Escalation Integration Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/model_escalation.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/model_escalation.yaml');
     
     // Set up a mock workspaces directory under the OS temp root via workspace host location
     const relativeCwd = 'escalation-' + Math.random().toString(36).substring(2, 8);

@@ -21,7 +21,7 @@ describe('Stream Token Timing and Mutation Guard Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/stream_token_timing.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/stream_token_timing.yaml');
     
     const relativeCwd = 'stream-timing-' + Math.random().toString(36).substring(2, 8);
     const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);

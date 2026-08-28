@@ -32,7 +32,7 @@ describe('Copilot SDK Client Integration Tests', () => {
         analytics_tracking_id: "test-tracking-id",
       });
 
-      const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/single_retry.yaml');
+      const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/single_retry.yaml');
       await proxy.updateConfig({
         filePath: snapshotPath,
         workDir: tempWorkDir,

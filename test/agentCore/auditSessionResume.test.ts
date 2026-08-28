@@ -37,7 +37,7 @@ describe('executeAuditSession retry against real SDK/proxy transport', () => {
 
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/gate_loop/audit_retry_prompt_prefix.yaml'
+      'test/snapshots/gate_loop/audit_retry_prompt_prefix.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
   }, 30000);

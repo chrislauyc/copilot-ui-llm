@@ -6,8 +6,8 @@ import { saveSpec, saveTask, getTask, getTasksForPbi } from '../../src/orchestra
 import { savePbi, getPbi } from '../../src/orchestration/db/pbiStore';
 import { getGitSandbox, getWorkspaceRoot, initializeWorkspace } from '../../src/agentCore/workspace';
 
-vi.mock('../utils/auditorHelper', async () => {
-  const actual = await vi.importActual<typeof import('../../src/agentCore/auditorHelper')>('../utils/auditorHelper');
+vi.mock('../../src/agentCore/auditorHelper', async () => {
+  const actual = await vi.importActual<typeof import('../../src/agentCore/auditorHelper')>('../../src/agentCore/auditorHelper');
   return {
     ...actual,
     getAuditorExecutionConfig: (_apiKey?: string, tierIndex: number = 0) => ({

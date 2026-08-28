@@ -18,7 +18,7 @@ describe('LargeToolOutputConfig with a custom (non-built-in) tool', () => {
     const proxyUrl = await proxy.start();
     const tempWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'large-output-'));
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/large_output/big_output.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/large_output/big_output.yaml');
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tempWorkDir });
 
     const client = new CopilotClient({

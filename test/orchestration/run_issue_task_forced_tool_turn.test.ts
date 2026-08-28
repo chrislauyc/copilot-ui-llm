@@ -15,7 +15,7 @@ describe('scripts/run-issue-task.ts', () => {
 
   it('imports runForcedToolTurnUntilTimeout from the shared enforcement util', () => {
     expect(source).toMatch(
-      /import\s*\{\s*runForcedToolTurnUntilTimeout\s*\}\s*from\s*['"]\.\.\/src\/utils\/toolCallEnforcement['"]/
+      /import\s*\{\s*runForcedToolTurnUntilTimeout\s*\}\s*from\s*['"]\.\.\/src\/agentCore\/toolCallEnforcement['"]/
     );
   });
 

@@ -20,7 +20,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
     console.log('Starting spec_gate_audit integration test...');
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_gate_audit_failure.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/spec_gate_audit_failure.yaml');
     
     // Use getWorkspaceHostLocation to create directory on host, and relative path for the API
     const relativeCwd = 'spec-gate-' + Math.random().toString(36).substring(2, 8);

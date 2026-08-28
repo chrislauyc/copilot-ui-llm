@@ -1,5 +1,5 @@
 import { assert, describe, it, vi, afterEach } from "vitest";
-import { runNativeProcess } from "../../src/workspace/nativeRunner.js";
+import { runNativeProcess } from "../../src/agentCore/workspace/nativeRunner.js";
 import { execSync } from "child_process";
 import * as os from "os";
 

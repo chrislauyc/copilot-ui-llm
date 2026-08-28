@@ -20,7 +20,7 @@ describe('Telemetry Schema and History Validation Tests', () => {
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
 
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/telemetry_schema_validation.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/telemetry_schema_validation.yaml');
     
     const tempCwd = path.join(process.cwd(), 'tmp-telemetry-validation-workspace');
     if (fs.existsSync(tempCwd)) {

@@ -45,7 +45,7 @@ function makeSessionDouble(): SessionDouble {
 // (auditorHelper.ts), so the only seam available to a test is the
 // `../copilotSdk/boundary` module itself -- mock the class it exports rather
 // than trying to inject a client instance.
-vi.mock('../copilotSdk/boundary', () => {
+vi.mock('../../src/agentCore/copilotSdk/boundary', () => {
   class MockCopilotClient {
     async start() {}
     async stop() {}

@@ -20,7 +20,7 @@ import {
 // exactly what #328's black-box unit tests (mocked session/client doubles)
 // cannot catch.
 //
-// Snapshot YAMLs live in src/test/snapshots/session_wrapper/. See that
+// Snapshot YAMLs live in test/snapshots/session_wrapper/. See that
 // directory's naming for which test each file backs.
 describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   let proxy: CapiProxy;
@@ -95,7 +95,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   // fields, and the same `SessionWrapper` instance transparently decides
   // create vs resume as documented.
   it('creates then resumes a real SDK session across two sendAndWait calls', { timeout: 30000 }, async () => {
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/session_wrapper/create_resume.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/session_wrapper/create_resume.yaml');
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 
     const client = makeClient();
@@ -132,7 +132,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   // prompt fails this test immediately instead of silently drifting until
   // someone re-runs the capture script by hand.
   it("does not drift from the installed SDK's own baseline system message", { timeout: 30000 }, async () => {
-    const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/session_wrapper/create_resume.yaml');
+    const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/session_wrapper/create_resume.yaml');
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 
     const client = makeClient();
@@ -168,7 +168,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   it('lets a real model turn call an allowed tool, and the SDK actually executes it', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/session_wrapper/tool_permission_allowed.yaml'
+      'test/snapshots/session_wrapper/tool_permission_allowed.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 
@@ -214,7 +214,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   it('freezes systemMessage across resume; tool/prompt mutations surface via availableTools and an appended notice instead', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/session_wrapper/resume_rederivation.yaml'
+      'test/snapshots/session_wrapper/resume_rederivation.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 
@@ -270,7 +270,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   it('rejects a real tool call for a tool removed before resume', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/session_wrapper/removeTools_denial.yaml'
+      'test/snapshots/session_wrapper/removeTools_denial.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 
@@ -335,7 +335,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   it('rejects a real "grep" tool call when "grep" is disabled, even while its permission-kind sibling "view" stays enabled', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/session_wrapper/kind_collision_denial.yaml'
+      'test/snapshots/session_wrapper/kind_collision_denial.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 
@@ -390,7 +390,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   it('lets a real model turn call a custom handler-backed tool, and the SDK actually executes it', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/session_wrapper/custom_tool_permission_allowed.yaml'
+      'test/snapshots/session_wrapper/custom_tool_permission_allowed.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 
@@ -436,7 +436,7 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   it('rejects a real call to a custom tool disabled before resume', { timeout: 30000 }, async () => {
     const snapshotPath = path.resolve(
       process.cwd(),
-      'src/test/snapshots/session_wrapper/custom_tool_removeTool_denial.yaml'
+      'test/snapshots/session_wrapper/custom_tool_removeTool_denial.yaml'
     );
     await proxy.updateConfig({ filePath: snapshotPath, workDir: tmpWorkDir });
 

@@ -12,7 +12,7 @@ describe("Docker workspace host location", () => {
     delete process.env.WORKSPACE_HOST_LOCATION;
     vi.resetModules();
 
-    const { getWorkspaceHostLocation } = await import("../../src/workspace/dockerRunner.js");
+    const { getWorkspaceHostLocation } = await import("../../src/agentCore/workspace/dockerRunner.js");
 
     assert.strictEqual(getWorkspaceHostLocation(), DEFAULT_WORKSPACE_HOST_LOCATION);
   });
@@ -21,7 +21,7 @@ describe("Docker workspace host location", () => {
     process.env.WORKSPACE_HOST_LOCATION = "/custom/workspace";
     vi.resetModules();
 
-    const { getWorkspaceHostLocation } = await import("../../src/workspace/dockerRunner.js");
+    const { getWorkspaceHostLocation } = await import("../../src/agentCore/workspace/dockerRunner.js");
 
     assert.strictEqual(getWorkspaceHostLocation(), "/custom/workspace");
   });
