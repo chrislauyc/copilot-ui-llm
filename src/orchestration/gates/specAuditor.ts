@@ -1,0 +1,85 @@
+import { getAuditorExecutionConfig, executeAuditSession } from '../../agentCore/auditorHelper';
+import { ExecutionConfig } from '../../agentCore/providerRegistry';
+import { submitSpecAuditTool } from '../../config/tools';
+import { getGitSandbox, getExecCommand } from '../../agentCore/workspace';
+
+interface SpecAuditResult {
+  readonly pass: boolean;
+  readonly feedback?: string;
+  readonly violation_type?: string;
+}
+
+/**
+ * `executionConfigOverride` lets callers supply a pre-resolved
+ * ExecutionConfig (e.g. from the Issue 79 auditor rotation pool) instead of
+ * the single-tier default -- when omitted, behavior is unchanged from
+ * before the rotation pool existed.
+ */
+export async function runSpecAudit(
+  cwd: string,
+  abortSignal?: AbortSignal,
+  executionConfigOverride?: ExecutionConfig,
+): Promise<{ pass: boolean; feedback: string }> {
+  const targetCwd = cwd;
+  const executionConfig = executionConfigOverride ?? getAuditorExecutionConfig();
+  try {
+    console.log('[runSpecAudit] Start git diff async...');
+    // 1. Get git diff against active container sandbox worktree
+    let diff = '';
+    try {
+      diff = await getGitSandbox().getGitDiffAsync();
+    } catch (e: unknown) {
+      const errObj = e as Record<string, unknown> | null;
+      diff = errObj && 'stdout' in errObj ? String(errObj.stdout) : '';
+    }
+    console.log('[runSpecAudit] Diff length:', diff.length);
+    if (!diff.trim()) {
+      return { pass: true, feedback: 'No code changes to audit (empty git diff).' };
+    }
+    // 2. Read architecture-spec.md
+    let spec = '';
+    const execResult = await getExecCommand()(
+      targetCwd ? `cd '${targetCwd}' && cat architecture-spec.md` : 'cat architecture-spec.md',
+      abortSignal
+    );
+    if (execResult.exitCode === 0) {
+      spec = execResult.stdout;
+      console.log('[runSpecAudit] Spec found, length:', spec.length);
+    } else {
+      console.log('[runSpecAudit] No spec found.');
+      return { pass: true, feedback: 'No architecture-spec.md found.' };
+    }
+
+    const systemPrompt = `You are a strict Spec-Gate Auditor checking for structural deviations.You must not answer conversationally and must strictly invoke 'submit_spec_audit'.`;
+    const auditPrompt = `
+      Analyze the current code patch against the architecture spec.
+      
+      ARCHITECTURE SPEC:
+      ${spec}
+      
+      GIT DIFF:
+      ${diff}
+    `;
+    console.log('[runSpecAudit] Executing audit session...');
+    const auditResult = await executeAuditSession<SpecAuditResult>(
+      targetCwd,
+      executionConfig,
+      systemPrompt,
+      submitSpecAuditTool,
+      auditPrompt,
+      {},
+      abortSignal
+    );
+
+    if (auditResult) {
+      if (auditResult.pass === false || auditResult.violation_type === 'SPEC_VIOLATION') {
+        return { pass: false, feedback: `SPEC_VIOLATION: ${auditResult.feedback}` };
+      }
+      return { pass: true, feedback: auditResult.feedback || 'PASS' };
+    }
+    return { pass: false, feedback: 'SPEC_VIOLATION: Auditor failed to return a proper tool call.' };
+  } catch (err: unknown) {
+    const errorVal = err as Error | null;
+    return { pass: false, feedback: `SPEC_VIOLATION: Auditor session crashed: ${errorVal?.message || String(err)}` };
+  }
+}

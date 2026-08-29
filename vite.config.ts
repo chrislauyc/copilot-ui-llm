@@ -26,7 +26,7 @@ export default defineConfig(async () => {
     test: {
       globals: true,
       environment: 'node',
-      setupFiles: ['./src/test/vitest.setup.ts'],
+      setupFiles: ['./test/vitest.setup.ts'],
       // Single thread pool: all test files share one worker process, eliminating
       // the N sequential server lifecycle problem.
       pool: 'threads',
@@ -45,12 +45,13 @@ export default defineConfig(async () => {
       include: [
         'src/**/*.test.ts',
         'src/**/*.test.tsx',
-        'src/test/**/*.test.ts',
+        'test/**/*.test.ts',
+        'test/**/*.test.tsx',
       ],
       coverage: {
         provider: 'v8',
         include: ['src/**/*.ts', 'src/**/*.tsx', 'server.ts'],
-        exclude: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/test/**/*'],
+        exclude: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'test/**/*'],
       },
     },
   };
