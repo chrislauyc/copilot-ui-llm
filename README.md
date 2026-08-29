@@ -120,7 +120,7 @@ To guarantee the platform is strictly model-agnostic, all core orchestrator modu
 
 ### 5.2 Host-Container Volume Handoff & Git Guard Rail
 
-All workspace management is handled via the src/workspace code, to which changes are not permitted without a discussion.
+All workspace management is handled via the src/agentCore/workspace code, to which changes are not permitted without a discussion.
 
 - **SYS-REQ-022 (Path Space Separation):** The system distinguishes three path spaces that must never be substituted for one another:
   1. **App source tree** (`process.cwd()` at server boot) — the copilot-ui repo itself.
@@ -130,8 +130,8 @@ All workspace management is handled via the src/workspace code, to which changes
 
 ### 5.3 SDK Import Boundary
 
-- **SYS-REQ-024:** All `@github/copilot-sdk` imports **shall** be confined to `src/copilotSdk/boundary.ts`. No other module may import from `@github/copilot-sdk` directly; they consume re-exported types and wrapper functions from the boundary module instead.
-- **SYS-REQ-025:** Orchestration logic (gate loop, role dispatch, checkpoint handling) **shall** live in a dedicated module under `src/orchestrator/`, not inline in Express route handlers. Route handlers parse the request, call into the orchestrator module, and stream the result.
+- **SYS-REQ-024:** All `@github/copilot-sdk` imports **shall** be confined to `src/agentCore/copilotSdk/boundary.ts`. No other module may import from `@github/copilot-sdk` directly; they consume re-exported types and wrapper functions from the boundary module instead.
+- **SYS-REQ-025:** Orchestration logic (gate loop, role dispatch, checkpoint handling) **shall** live in a dedicated module under `src/orchestration/orchestrator/`, not inline in Express route handlers. Route handlers parse the request, call into the orchestrator module, and stream the result.
 
 ### 5.4 Strict Architectural Layer-Boundary Separation
 
@@ -144,9 +144,9 @@ To maintain portability and resilience across varying container virtualization e
 
 Session creation and resumption are a common source of silent regressions (dropped `systemMessage`, dropped tool-scoping, cache-busting config drift on resume). Rather than spec each pitfall individually, the system closes them structurally with a single choke-point module.
 
-> **Superseded `hardenedSession.ts`.** Per the "Migration plan (hotswap)" section below, `SessionWrapper` (`src/copilotSdk/sessionWrapper.ts`) replaced `hardenedSession.ts` as the sanctioned entry point once the one-pass call-site migration (step 4) and file deletion (step 5) landed. The detailed SessionWrapper requirements live under SYS-REQ-027 (and SYS-REQ-028 where noted); SYS-REQ-026/026a-c below are retained as the base system-level statement of the choke-point requirement, now pointed at the current module.
+> **Superseded `hardenedSession.ts`.** Per the "Migration plan (hotswap)" section below, `SessionWrapper` (`src/agentCore/copilotSdk/sessionWrapper.ts`) replaced `hardenedSession.ts` as the sanctioned entry point once the one-pass call-site migration (step 4) and file deletion (step 5) landed. The detailed SessionWrapper requirements live under SYS-REQ-027 (and SYS-REQ-028 where noted); SYS-REQ-026/026a-c below are retained as the base system-level statement of the choke-point requirement, now pointed at the current module.
 
-- **SYS-REQ-026:** All `CopilotClient.createSession` and `CopilotClient.resumeSession` calls **shall** be issued exclusively through `src/copilotSdk/sessionWrapper.ts`. No other module — including scripts under `scripts/` — may call these SDK methods directly.
+- **SYS-REQ-026:** All `CopilotClient.createSession` and `CopilotClient.resumeSession` calls **shall** be issued exclusively through `src/agentCore/copilotSdk/sessionWrapper.ts`. No other module — including scripts under `scripts/` — may call these SDK methods directly.
 - **SYS-REQ-026a:** Each session's tool policy (`availableTools`, `tools`, `systemMessage`, `autoApprovedTools`) **shall** be stored as an immutable value bound to the session at creation time.
 - **SYS-REQ-026b:** On every resume, for any reason (retry, reconnect, or otherwise), `SessionWrapper` **shall** re-derive the full session configuration from the stored policy — never a partial or caller-supplied config — so a resumed session cannot silently diverge from its original tool-scoping or system prompt.
 - **SYS-REQ-026c (Unwanted Behavior):** **If** any module attempts to call `createSession`/`resumeSession` outside `SessionWrapper`, **then** this **shall** be caught by lint rule (covering both `src/**` and `scripts/**`), not left to code review alone.
@@ -194,7 +194,7 @@ Session creation and resumption are a common source of silent regressions (dropp
 
 ### 7.1 Workspace & Environment Integration
 
-- **SYS-REQ-001:** The system **shall** not manage docker container's lifecycle. src/workspace/dockerRunner.ts **shall** receive the container's name via an environment variable and assumes the workspace is mounted by volume at a fixed location inside the container.
+- **SYS-REQ-001:** The system **shall** not manage docker container's lifecycle. src/agentCore/workspace/dockerRunner.ts **shall** receive the container's name via an environment variable and assumes the workspace is mounted by volume at a fixed location inside the container.
 
 - **SYS-REQ-004:** The system **shall** map external model definitions to generic API handlers using an abstract provider adapter layer.
 - **SYS-REQ-005:** The system **shall** strip unsupported parameters from payloads before sending requests to non-native generic compatibility layers.
@@ -258,7 +258,7 @@ Session creation and resumption are a common source of silent regressions (dropp
 
 ### 7.7 Workspace Command Execution Centralization
 
-- **SYS-REQ-020 (Ubiquitous):** All workspace mutation, Git operations, and terminal command execution **shall** flow exclusively through the three core workspace functions exported from `src/workspace/index.ts`: `initializeWorkspace()`, `getGitSandbox()`, and `getExecCommand()`.
+- **SYS-REQ-020 (Ubiquitous):** All workspace mutation, Git operations, and terminal command execution **shall** flow exclusively through the three core workspace functions exported from `src/agentCore/workspace/index.ts`: `initializeWorkspace()`, `getGitSandbox()`, and `getExecCommand()`.
 - **SYS-REQ-020a (Unwanted Behavior):** **If** any module directly imports and uses `child_process` methods (`exec`, `execSync`, `spawn`) instead of routing through the centralized workspace API, **then** the system **shall** fail code review as a violation of architectural boundary separation.
   - _Rationale:_ Centralized routing ensures unified timeout policies (GIT_TIMEOUT_MS, EXEC_TIMEOUT_MS), host-container environment abstraction, concurrency control via `GitSandbox.withLock()`, and coherent audit trails across all autonomous execution.
 
@@ -276,14 +276,14 @@ Tests MUST NOT create, persist, or mutate files or directories inside the reposi
   - do not conflate the workspace the app is managing with the workspace containing the app's code.
 
   - If a test needs to exercise Git operations or workspace behaviors, prefer one of:
-  - invoking the centralized workspace APIs in src/workspace,
-  - mock the API in src/workspace so the tests don't make any real git operations or command executions.
+  - invoking the centralized workspace APIs in src/agentCore/workspace,
+  - mock the API in src/agentCore/workspace so the tests don't make any real git operations or command executions.
 
 Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git management) and prevents accidental destructive test behavior that could mutate or delete repository data. Adopting a test helper and a defensive check protects developers and CI runners from catastrophic mistakes.
 
 ## Policy exceptions
 
-- Any use of `child_process` outside `src/workspace/` requires an explicit, documented exception and code-review approval.
+- Any use of `child_process` outside `src/agentCore/workspace/` requires an explicit, documented exception and code-review approval.
 
 
 
@@ -315,7 +315,7 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 **Status:** draft, replaces SYS-REQ-026 family (decision made — see below)
 **Relationship to existing spec:** `README.md` §5.5 ("SessionWrapper
 (Sole SDK Session Entry Point)") contains SYS-REQ-026/026a/026b/026c, now
-pointed at `src/copilotSdk/sessionWrapper.ts` as the sanctioned entry point.
+pointed at `src/agentCore/copilotSdk/sessionWrapper.ts` as the sanctioned entry point.
 At the time this section was drafted, that entry point was still
 `src/copilotSdk/hardenedSession.ts` (function module keyed by
 `sessionId` against two separate `Map`s — `policyBySessionId` and `sessionBySessionId`
@@ -383,7 +383,7 @@ drift this spec exists to close off. See "Migration plan" section at the end.
 
 - **SYS-REQ-027c:** `sendAndWait()` **shall** call `_createConfig()` on session
   start and **shall** decide internally whether to call `createSession` or
-  `resumeSession` against the SDK boundary (`src/copilotSdk/boundary.ts`,
+  `resumeSession` against the SDK boundary (`src/agentCore/copilotSdk/boundary.ts`,
   SYS-REQ-024). This decision **shall** be invisible to the caller: identical
   caller-visible contract (response shape, tool enforcement, system-prompt effect)
   whether the underlying call is a fresh session or a resume.
@@ -504,7 +504,7 @@ drift this spec exists to close off. See "Migration plan" section at the end.
 
 ## Migration plan (hotswap)
 
-1. **Build in isolation.** New file (e.g. `src/copilotSdk/sessionWrapper.ts`),
+1. **Build in isolation.** New file (e.g. `src/agentCore/copilotSdk/sessionWrapper.ts`),
    zero imports from or into `hardenedSession.ts`, zero production call sites
    wired to it yet.
 2. **Satisfy every SYS-REQ-027* item and its associated tests** (invariant,
