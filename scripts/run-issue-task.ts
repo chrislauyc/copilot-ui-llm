@@ -8,11 +8,11 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
 }
 import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
-import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
-import { getReviewerExecutionConfig } from '../src/utils/auditorHelper';
-import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/copilotSdk/boundary';
-import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
+import { app, setActiveOpenRouterSessionId } from '../src/orchestration/serverRuntime';
+import { getReviewerExecutionConfig } from '../src/agentCore/auditorHelper';
+import { runForcedToolTurnUntilTimeout } from '../src/agentCore/toolCallEnforcement';
+import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/agentCore/copilotSdk/boundary';
+import { SessionWrapper } from '../src/agentCore/copilotSdk/sessionWrapper';
 import {
   createRunGhCommandTool,
   ALLOWED_GH_COMMANDS,

@@ -1,6 +1,6 @@
 import { ModelTier } from '../config/models';
-import { CopilotSession } from '../copilotSdk/boundary';
-import { SessionWrapper } from '../copilotSdk/sessionWrapper';
+import { CopilotSession } from '../agentCore/copilotSdk/boundary';
+import { SessionWrapper } from '../agentCore/copilotSdk/sessionWrapper';
 
 export interface TaskDecomposition {
   readonly version: number;

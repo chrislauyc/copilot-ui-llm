@@ -1,4 +1,4 @@
-import { SessionEvent } from '../copilotSdk/boundary';
+import { SessionEvent } from '../agentCore/copilotSdk/boundary';
 
 /**
  * Custom gate and loop events used for the verification cycles.

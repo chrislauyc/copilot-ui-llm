@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { defineTool } from '../../src/copilotSdk/boundary';
-import type { Tool } from '../../src/copilotSdk/boundary';
+import { defineTool } from '../../src/agentCore/copilotSdk/boundary';
+import type { Tool } from '../../src/agentCore/copilotSdk/boundary';
 
 /**
  * The only `gh` subcommands the issue-task agent is allowed to invoke.

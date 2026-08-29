@@ -2,7 +2,7 @@ import { app, initLogFile } from './server';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import express from 'express';
-import { initializeWorkspace } from './src/workspace';
+import { initializeWorkspace } from './src/agentCore/workspace';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 

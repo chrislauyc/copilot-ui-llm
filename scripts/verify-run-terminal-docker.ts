@@ -30,11 +30,11 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { CapiProxy } from '../src/test/harness/CapiProxy';
-import { CopilotClient, defineTool } from '../src/copilotSdk/boundary';
-import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
+import { CapiProxy } from '../test/harness/CapiProxy';
+import { CopilotClient, defineTool } from '../src/agentCore/copilotSdk/boundary';
+import { SessionWrapper } from '../src/agentCore/copilotSdk/sessionWrapper';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../src/config/tools';
-import { getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from '../src/workspace';
+import { getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from '../src/agentCore/workspace';
 
 const execFileAsync = promisify(execFile);
 
