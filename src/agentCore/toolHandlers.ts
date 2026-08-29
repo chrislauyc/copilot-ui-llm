@@ -7,7 +7,6 @@ export function makeDockerToolHandler(
   res: import("express").Response,
   abortSignal: AbortSignal,
   writeLog: (message: string, level?: LogLevel) => void,
-  sensitiveValuesCache: Set<string> | null,
   sessionId?: string,
   getAutoApproveAll?: () => boolean
 ) {

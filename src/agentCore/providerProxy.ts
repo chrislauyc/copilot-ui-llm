@@ -16,7 +16,13 @@ import type { Express } from 'express';
  *
  * `agentCore` must never import from `orchestration`, so logging is taken
  * as an injected dependency (`writeLog`) rather than imported directly from
- * `orchestration/orchestrator/sessionState`.
+ * `orchestration/orchestrator/sessionState`. This is the intended boundary,
+ * but it isn't lint-enforced yet (see the reorg issue's open question about
+ * an import-boundary rule), and two other agentCore modules currently
+ * violate it: `toolHandlers.ts` imports `LogLevel` from
+ * `orchestration/orchestrator/sessionState`, and `workspace/git.ts` has
+ * dynamic imports from `orchestration/db/taskStore`. New agentCore code
+ * (like this file) should hold the line rather than add a third exception.
  */
 
 /**
