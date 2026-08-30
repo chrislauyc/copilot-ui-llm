@@ -27,8 +27,8 @@ execution), and using the wrong one is still a latent bug even when it happens t
 today.
 
 **Resolved** (see `copilot-ui-remediation-plan.md` Phase 0-A/2-A): gate execution cwd
-now sources from `getWorkspaceRoot()` throughout `src/orchestrator/gateLoop.ts` and
-`src/serverRuntime.ts`; `DEFAULT_WORKSPACE_DIR` (`getWorkspaceHostLocation()`) is
+now sources from `getWorkspaceRoot()` throughout `src/orchestration/orchestrator/gateLoop.ts` and
+`src/orchestration/serverRuntime.ts`; `DEFAULT_WORKSPACE_DIR` (`getWorkspaceHostLocation()`) is
 reserved for the SDK client's `workingDirectory` only. This distinction is now codified
 as SYS-REQ-022/023 in `README.md`. If a new callsite falls back to
 `DEFAULT_WORKSPACE_DIR` or `process.cwd()` for gate/exec purposes, treat that as a
@@ -47,33 +47,36 @@ container-down detection, or it will silently report green when gates never ran.
 
 `type-discipline-guide.md` bans `any`/`as any` outright; the codebase still carries
 legacy instances (concentrated in `serverRuntime.ts`). `eslint.config.js` enforces
-`@typescript-eslint/no-explicit-any` as an **error** in `src/orchestrator/**` and
-`src/copilotSdk/boundary.ts`, with `scripts/check-explicit-any.ts` as a secondary check
-against `eslint-disable` escape hatches. Enforce the guide on new/touched code. Don't
+`@typescript-eslint/no-explicit-any` as an **error** in `src/orchestration/orchestrator/**` and
+`src/agentCore/copilotSdk/boundary.ts`. `scripts/check-explicit-any.ts` was intended as a
+secondary check against `eslint-disable` escape hatches, but it still scans the pre-reorg
+`src/orchestrator`/`src/copilotSdk` paths and currently no-ops silently since neither
+exists anymore — treat it as not providing coverage until its scan paths are fixed in a
+code change (out of scope for this docs-only PR). Enforce the guide on new/touched code. Don't
 ignore the guide because old code doesn't follow it, and don't do an unrequested cleanup
 pass on unrelated `any`s while working on something else.
 
-## SDK imports go through src/copilotSdk/boundary.ts
+## SDK imports go through src/agentCore/copilotSdk/boundary.ts
 
 `@github/copilot-sdk` types and client construction are imported from
-`src/copilotSdk/boundary.ts`, not from the package directly (SYS-REQ-024) — one seam to
+`src/agentCore/copilotSdk/boundary.ts`, not from the package directly (SYS-REQ-024) — one seam to
 update when the SDK's shape changes, instead of chasing it across files. The boundary
 module already exists; new code needing an SDK type should import it from the boundary,
 not add a fresh `@github/copilot-sdk` import.
 
-## Orchestration lives under src/orchestrator/, not inline in serverRuntime.ts
+## Orchestration lives under src/orchestration/orchestrator/, not inline in serverRuntime.ts
 
 `handleGateLoop` (formerly ~1300 lines inline in `serverRuntime.ts`) now lives in
-`src/orchestrator/gateLoop.ts`, with session lifecycle helpers in
-`src/orchestrator/sessionState.ts` (SYS-REQ-025). `serverRuntime.ts` retains route
+`src/orchestration/orchestrator/gateLoop.ts`, with session lifecycle helpers in
+`src/orchestration/orchestrator/sessionState.ts` (SYS-REQ-025). `serverRuntime.ts` retains route
 registration and cross-cutting state (`activeSessions`, `sseResToSessionId`,
 `activeLocks`, `getGlobalClient`, `writeLog`, `DEFAULT_WORKSPACE_DIR`). Don't add new
-orchestration logic inline in route handlers — put it in `src/orchestrator/`.
+orchestration logic inline in route handlers — put it in `src/orchestration/orchestrator/`.
 
 ## Orphan processes on abort — resolved via detached process groups
 
 `dockerRunner.ts` and `nativeRunner.ts` spawn with `{ detached: true }` and kill via
-`killProcessGroup()` (`src/workspace/processGroup.ts`), signaling the whole process
+`killProcessGroup()` (`src/agentCore/workspace/processGroup.ts`), signaling the whole process
 group rather than just the direct child. Docker mode additionally runs a container-side
 kill pass keyed on an `EXEC_RUN_ID` marker to catch processes the group-kill can't reach
 inside the container's PID namespace. If debugging a "still running after abort"
@@ -111,7 +114,7 @@ again. Its silence-detection logic is a standalone reusable utility -- see
 ## resumeSession() drops the system prompt unless you re-pass it
 
 `client.resumeSession()` (base SDK, wrapped by `CopilotClient.resumeSession` in
-`src/copilotSdk/boundary.ts`) does not inherit `systemMessage` from the session
+`src/agentCore/copilotSdk/boundary.ts`) does not inherit `systemMessage` from the session
 being resumed. Any caller building a `resumeConfig` from scratch and omitting
 `systemMessage` will silently fall back to the SDK's full default `copilot-cli`
 system prompt (task/sub-agent, sql, report_intent, submit_code_review docs,
