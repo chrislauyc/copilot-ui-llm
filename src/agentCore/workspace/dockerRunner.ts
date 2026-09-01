@@ -2,11 +2,26 @@ import { spawn } from "child_process";
 import * as crypto from "crypto";
 import { killProcessGroup } from "./processGroup";
 
-const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "/tmp/applet_workspace";
-// The compose mount now binds the host workspace to the identical absolute
-// path inside the container (see docker-compose.yml), so the container-side
-// root is just the host location, not a separately-remapped constant.
-const FIXED_WORKSPACE_ROOT = WORKSPACE_HOST_LOCATION;
+// Deliberately no fallback default here. WORKSPACE_HOST_LOCATION must match
+// wherever `docker compose up` actually mounted the workspace (see
+// docker-compose.yml); silently defaulting to a guessed path (previously
+// /tmp/applet_workspace, which is shadowed by the container's /tmp tmpfs
+// mount) just reproduces a misconfiguration invisibly instead of failing at
+// the point it happens. See issue #446.
+let WORKSPACE_HOST_LOCATION = "";
+
+function getWorkspaceHostLocationOrThrow(): string {
+  if (!WORKSPACE_HOST_LOCATION) {
+    WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "";
+    if (!WORKSPACE_HOST_LOCATION) {
+      throw new Error(
+        "WORKSPACE_HOST_LOCATION environment variable is not set. It must match the " +
+          "path docker-compose.yml mounted the workspace at (see docker compose up).",
+      );
+    }
+  }
+  return WORKSPACE_HOST_LOCATION;
+}
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
 const EXEC_TIMEOUT_MS = 60_000;
@@ -48,7 +63,7 @@ export async function runDockerProcess(
       "-e",
       `EXEC_RUN_ID=${runId}`,
       "-w",
-      FIXED_WORKSPACE_ROOT,
+      getWorkspaceHostLocationOrThrow(),
       getContainerName(),
       "bash",
       "-s",
@@ -234,11 +249,15 @@ export async function execCommand(
   return runDockerProcess(command, signal ?? AbortSignal.timeout(EXEC_TIMEOUT_MS));
 }
 export function getWorkspaceRoot(): string {
-  return FIXED_WORKSPACE_ROOT;
+  // The compose mount binds the host workspace to the identical absolute
+  // path inside the container (see docker-compose.yml), so the
+  // container-side root is just the host location, not a separately
+  // -remapped constant.
+  return getWorkspaceHostLocationOrThrow();
 }
 export function getWorkspaceHostLocation(): string {
-  return WORKSPACE_HOST_LOCATION;
+  return getWorkspaceHostLocationOrThrow();
 }
 export function getGitDir(): string {
-  return FIXED_WORKSPACE_ROOT + "/snapshots/.git";
+  return getWorkspaceHostLocationOrThrow() + "/snapshots/.git";
 }
