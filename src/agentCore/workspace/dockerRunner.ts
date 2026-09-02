@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import * as crypto from "crypto";
 import { killProcessGroup } from "./processGroup";
 
@@ -22,6 +22,7 @@ function getWorkspaceHostLocationOrThrow(): string {
   }
   return WORKSPACE_HOST_LOCATION;
 }
+
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
 const EXEC_TIMEOUT_MS = 60_000;
@@ -43,6 +44,79 @@ function getContainerName(): string {
   return CONTAINER_NAME;
 }
 
+// Whether we've already confirmed WORKSPACE_HOST_LOCATION actually exists
+// inside the target container. Verified (and cached) once per process
+// lifetime rather than on every exec: cheap enough to be worth doing before
+// any real command runs, but not worth a `docker exec test -d` round-trip on
+// every single invocation. A present-but-wrong var (e.g. a stale value from
+// a previous job, or a step exporting a path different from the one
+// `docker compose up` mounted) is exactly the drift #446 calls out as
+// undetected by the missing-var check alone.
+let workspaceMountVerified = false;
+
+// Bound the mount-verification probe the same way exec/kill work elsewhere
+// in this file (EXEC_TIMEOUT_MS, CONTAINER_KILL_GRACE_MS): spawnSync is
+// fully synchronous and blocks the entire Node event loop until it
+// resolves, so an unbounded call here would let a wedged docker daemon
+// freeze the whole process (HTTP/SSE server, abort timers, every concurrent
+// session) on the very first runDockerProcess call after startup.
+const VERIFY_MOUNT_TIMEOUT_MS = 5_000;
+
+function verifyWorkspaceMount(): void {
+  if (workspaceMountVerified) return;
+  const location = getWorkspaceHostLocationOrThrow();
+  const containerName = getContainerName();
+  const result = spawnSync("docker", ["exec", containerName, "test", "-d", location], {
+    timeout: VERIFY_MOUNT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    encoding: "utf-8",
+  });
+  // Node sets BOTH `error` (code "ETIMEDOUT") and `signal` on a spawnSync
+  // timeout, so this must be checked before the generic `result.error`
+  // branch below, or the timeout always gets misreported as a generic
+  // "failed to verify" error instead of the more actionable diagnosis here.
+  if (result.signal || (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    throw new Error(
+      `Timed out after ${VERIFY_MOUNT_TIMEOUT_MS}ms verifying WORKSPACE_HOST_LOCATION ("${location}") inside ` +
+        `container "${containerName}"${result.signal ? ` (docker exec was killed with ${result.signal})` : ""}. ` +
+        "The docker daemon or container may be unresponsive.",
+    );
+  }
+  if (result.error) {
+    throw new Error(
+      `Failed to verify WORKSPACE_HOST_LOCATION ("${location}") inside container "${containerName}": ${result.error.message}`,
+    );
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr || "").trim();
+    // `docker exec ... test -d <path>` exits non-zero both when the path is
+    // genuinely missing inside an otherwise-healthy container (test's own
+    // exit code, no stderr) and when docker itself couldn't run the command
+    // at all -- container stopped, container missing, daemon unreachable --
+    // which surfaces as docker CLI stderr rather than a plain `test`
+    // failure. Distinguish them so a dead container doesn't get misdiagnosed
+    // as a WORKSPACE_HOST_LOCATION mismatch.
+    const looksLikeDockerCliFailure =
+      /No such container|is not running|Cannot connect to the Docker daemon/i.test(stderr);
+    if (looksLikeDockerCliFailure) {
+      throw new Error(
+        `Could not verify WORKSPACE_HOST_LOCATION inside container "${containerName}": docker exec failed before ` +
+          `it could check the path (${stderr || `exit code ${result.status}`}). Ensure the container is running ` +
+          "before executing commands.",
+      );
+    }
+    throw new Error(
+      `WORKSPACE_HOST_LOCATION ("${location}") does not exist inside container "${containerName}"` +
+        `${stderr ? `: ${stderr}` : ""}. ` +
+        "This usually means the container was mounted with a different WORKSPACE_HOST_LOCATION than the one " +
+        "currently set (e.g. a stale value from a previous job, or a step exporting a path different from the " +
+        "one `docker compose up` used). Ensure every step that sets CONTAINER_NAME/WORKSPACE_HOST_LOCATION uses " +
+        "the exact same value the container was started with.",
+    );
+  }
+  workspaceMountVerified = true;
+}
+
 /**
  * Executes a command inside the persistent Docker container via `docker exec`.
  * The container is started once by initializeWorkspace and remains running
@@ -56,6 +130,11 @@ export async function runDockerProcess(
   // Needs to run docker exec -i container_name bash -s <<< "command"
   // No need to sanitize. The container is already an isolated environment.
   return new Promise((resolve) => {
+    // Throws synchronously (rejecting this promise, same as a missing
+    // CONTAINER_NAME already did) if the var is unset or doesn't match
+    // reality, before we ever spawn the real command.
+    verifyWorkspaceMount();
+
     const runId = crypto.randomUUID();
     const child = spawn("docker", [
       "exec",
