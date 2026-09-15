@@ -14,9 +14,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockExecCommand = vi.fn(async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }));
 
-vi.mock('../../src/agentCore/workspace', () => ({
-  getExecCommand: () => mockExecCommand,
-}));
+const MOCK_WORKSPACE_ROOT = '/mock-workspace-root';
+
+vi.mock('../../src/agentCore/workspace', async () => {
+  // Keep the real module (getWorkspaceRoot/resolveWorkDir semantics) and
+  // stub only the exec boundary the handler routes through.
+  const actual = await vi.importActual<typeof import('../../src/agentCore/workspace')>(
+    '../../src/agentCore/workspace',
+  );
+  return {
+    ...actual,
+    getExecCommand: () => mockExecCommand,
+    getWorkspaceRoot: () => MOCK_WORKSPACE_ROOT,
+  };
+});
 
 import { buildAuditorSessionSettings } from '../../src/agentCore/auditorHelper';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../../src/config/tools';
@@ -63,7 +74,15 @@ describe('buildAuditorSessionSettings default toolset (issue #299)', () => {
     expect(execTool).toBeDefined();
 
     const result = await execTool!.handler({ command: 'echo hi' });
-    expect(mockExecCommand).toHaveBeenCalledWith('echo hi', undefined);
+    // timeoutMs is always populated now (the clamped model-supplied value,
+    // or DEFAULT_TIMEOUT_SECONDS * 1000 when timeoutSeconds is omitted) so
+    // the tool boundary's deadline composes with whatever signal the
+    // handler passes, instead of being silently dropped. See PR #465
+    // review + AGENTS.md's "run_terminal_docker" section.
+    expect(mockExecCommand).toHaveBeenCalledWith('echo hi', undefined, {
+      workDir: MOCK_WORKSPACE_ROOT,
+      timeoutMs: 60_000,
+    });
     expect(result).toMatchObject({ stdout: 'ok', stderr: '', exitCode: 0 });
   });
 
